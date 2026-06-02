@@ -1,0 +1,17 @@
+---
+description: infrazeug design source of truth and locked semantics from SOUL.md
+alwaysApply: true
+---
+
+# infrazeug — follow SOUL.md
+
+This repo implements the Rust rewrite described in **SOUL.md** at the project root.
+
+Before structural changes:
+
+1. Read the relevant SOUL.md section (core §3, transport §4, emulation §5, secrets §6, MCP §6bis, **TUI §6ter**, milestones §10–11).
+2. Respect **locked** semantics: plan-time validation; barrier-by-default propagation; no MCP secret exposure; `VarAcl`; TUI modal vs non-modal prompts; **postcard RPC** (not protobuf); flat groups; explicit `Argv`; no controller state file.
+3. Stay within the **active milestone** scope unless the user explicitly expands it.
+4. Prefer project skill `infrazeug-soul` and subagents under `.cursor/agents/` for domain work.
+
+Crate names and layout must match SOUL.md §2 workspace table.

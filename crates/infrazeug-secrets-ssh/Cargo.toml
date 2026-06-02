@@ -1,0 +1,17 @@
+[package]
+name = "infrazeug-secrets-ssh"
+description = "ssh-agent recipient provider for infrazeug vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+chacha20poly1305.workspace = true
+rand.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+infrazeug-secrets = { workspace = true }

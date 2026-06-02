@@ -1,0 +1,16 @@
+[package]
+name = "hello-dynamic"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+infrazeug-api = { workspace = true }
+infrazeug-core = { workspace = true }
+infrazeug-native = { workspace = true }
+infrazeug-shell = { workspace = true }
+serde.workspace = true
+tokio.workspace = true
+uuid.workspace = true

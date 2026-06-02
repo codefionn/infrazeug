@@ -1,0 +1,19 @@
+[package]
+name = "infrazeug-ext-stackit-api"
+description = "STACKIT IaaS API client for infrazeug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+urlencoding = "2"
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

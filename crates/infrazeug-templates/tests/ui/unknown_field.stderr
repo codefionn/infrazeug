@@ -1,0 +1,7 @@
+error[E0609]: no field `nope` on type `V`
+  --> tests/ui/unknown_field.rs:10:13
+   |
+10 |     let _ = template!("{{ v.nope }}", v = v);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unknown field
+   |
+   = note: this error originates in the macro `template` (in Nightly builds, run with -Z macro-backtrace for more info)

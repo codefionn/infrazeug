@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<!--
+  Self-contained interactive view of an infrazeug planning DAG.
+  Rendered by GraphView::to_html_with_rankdir (crates/infrazeug-core/src/graph.rs).
+  Two tokens are string-replaced at render time:
+    __INFRAZEUG_GRAPH_DATA__  -> the GraphView as a JSON object literal (HTML-safe)
+    __INFRAZEUG_RANKDIR__     -> "TB" or "LR"
+  No external assets: everything (CSS + JS) is inlined so the file opens offline.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>infrazeug graph</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-border: #262b36;
+    --text: #e6e9ef;
+    --muted: #97a0b0;
+    --accent: #6ea8fe;
+    --canvas-bg: #f7f8fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    overflow: hidden;
+  }
+  #panel {
+    width: 280px;
+    flex: 0 0 280px;
+    height: 100%;
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--panel-border);
+    padding: 14px 14px 40px;
+  }
+  #panel h1 { font-size: 14px; margin: 0 0 2px; letter-spacing: .2px; }
+  #counts { color: var(--muted); margin: 0 0 14px; font-size: 12px; }
+  .section { margin-bottom: 16px; }
+  .section > .label {
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: .8px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .filter-list { max-height: 180px; overflow-y: auto; padding-right: 4px; }
+  .filter-list label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 2px 0;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .filter-list label:hover { color: #fff; }
+  .filter-list input { accent-color: var(--accent); }
+  .filter-list .empty { color: var(--muted); font-style: italic; }
+  #search {
+    width: 100%;
+    padding: 7px 9px;
+    background: #0d0f14;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    color: var(--text);
+    outline: none;
+  }
+  #search:focus { border-color: var(--accent); }
+  button.reset {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  button.reset:hover { color: #fff; border-color: var(--accent); }
+  #details { font-size: 12px; }
+  #details .none { color: var(--muted); font-style: italic; }
+  #details .row { margin: 5px 0; word-break: break-word; }
+  #details .k { color: var(--muted); }
+  #details .chip {
+    display: inline-block;
+    background: #0d0f14;
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin: 2px 4px 0 0;
+  }
+  #details .name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; }
+  .legend .item { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+  .legend .sw { width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,.25); }
+  #stage { flex: 1 1 auto; position: relative; height: 100%; background: var(--canvas-bg); }
+  #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #canvas.panning { cursor: grabbing; }
+  #hint {
+    position: absolute; right: 12px; bottom: 10px;
+    color: #8a93a3; font-size: 11px; background: rgba(255,255,255,.7);
+    padding: 3px 8px; border-radius: 6px; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <aside id="panel">
+    <h1>infrazeug graph</h1>
+    <p id="counts"></p>
+
+    <div class="section">
+      <div class="label">Search</div>
+      <input id="search" type="search" placeholder="Find node by name…" autocomplete="off">
+    </div>
+
+    <div class="section">
+      <div class="label"><span>Machines</span><span id="m-count"></span></div>
+      <div id="machines" class="filter-list"></div>
+    </div>
+
+    <div class="section">
+      <div class="label"><span>Tags</span><span id="t-count"></span></div>
+      <div id="tags" class="filter-list"></div>
+    </div>
+
+    <div class="section">
+      <button class="reset" id="reset">Reset view &amp; filters</button>
+    </div>
+
+    <div class="section">
+      <div class="label">Details</div>
+      <div id="details"><div class="none">Click a node.</div></div>
+    </div>
+
+    <div class="section">
+      <div class="label">Legend</div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </aside>
+
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="hint">drag to pan · scroll to zoom · hover to trace deps</div>
+  </div>
+
+<script>
+"use strict";
+const DATA = __INFRAZEUG_GRAPH_DATA__;
+const RANKDIR = "__INFRAZEUG_RANKDIR__";
+
+// Node fill colors by kind. Keep in sync with dot_node_attrs() in graph.rs.
+const KIND_COLORS = {
+  begin:   "#b6f2b6",
+  finish:  "#f2b6b6",
+  barrier: "#fff3b0",
+  connect: "#cfeae6",
+  shell:   "#dbe7ff",
+  native:  "#d8d3ff",
+};
+const DEFAULT_COLOR = "#e3e6eb";
+function kindColor(kind) { return KIND_COLORS[kind] || DEFAULT_COLOR; }
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+const FONT = '13px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const SUBFONT = '11px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const NODE_H = 46, PAD_X = 14, MIN_W = 90, MAX_W = 260;
+const LAYER_GAP = 130, NODE_GAP = 28;
+
+// ---- filter + view state --------------------------------------------------
+const selMachines = new Set();
+const selTags = new Set();
+let searchTerm = "";
+let view = { scale: 1, offX: 0, offY: 0 };
+let laid = [];                 // visible nodes with positions
+let laidEdges = [];            // visible edges {from,to}
+let nodeById = new Map();      // id -> laid node
+let selectedId = null, hoverId = null;
+let highlight = null;          // Set of ids to keep bright, or null
+
+const allNodes = DATA.nodes || [];
+const allEdges = DATA.edges || [];
+
+// ---- helpers --------------------------------------------------------------
+function uniqueSorted(values) {
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+function nodeHasTag(n, t) {
+  return n.tags.includes(t) || n.tags.some(x => x.split("=")[0] === t);
+}
+function machineOk(n) {
+  if (selMachines.size === 0) return true;
+  return n.machines.some(m => selMachines.has(m));
+}
+function tagOk(n) {
+  if (selTags.size === 0) return true;
+  return Array.from(selTags).some(t => nodeHasTag(n, t));
+}
+
+// Visible set per GraphSelect semantics: OR within a category, AND across.
+function applyFilter() {
+  const keep = new Set();
+  for (const n of allNodes) {
+    if (machineOk(n) && tagOk(n)) keep.add(n.id);
+  }
+  const nodes = allNodes.filter(n => keep.has(n.id)).map(n => ({ ...n }));
+  const edges = allEdges.filter(e => keep.has(e.from) && keep.has(e.to));
+  computeLayout(nodes, edges);
+  if (selectedId && !nodeById.has(selectedId)) { selectedId = null; renderDetails(); }
+  recomputeHighlight();
+  draw();
+}
+
+// ---- layered (Sugiyama-lite) layout --------------------------------------
+function computeLayout(nodes, edges) {
+  laid = nodes;
+  laidEdges = edges;
+  nodeById = new Map(nodes.map(n => [n.id, n]));
+
+  const succ = new Map(), pred = new Map();
+  for (const n of nodes) { succ.set(n.id, []); pred.set(n.id, []); }
+  for (const e of edges) {
+    if (succ.has(e.from) && pred.has(e.to)) {
+      succ.get(e.from).push(e.to);
+      pred.get(e.to).push(e.from);
+    }
+  }
+
+  // Longest-path layering via Kahn topological order (subgraph is acyclic).
+  const indeg = new Map(nodes.map(n => [n.id, pred.get(n.id).length]));
+  const layer = new Map(nodes.map(n => [n.id, 0]));
+  const queue = nodes.filter(n => indeg.get(n.id) === 0).map(n => n.id);
+  const order = [];
+  while (queue.length) {
+    const id = queue.shift();
+    order.push(id);
+    for (const s of succ.get(id)) {
+      layer.set(s, Math.max(layer.get(s), layer.get(id) + 1));
+      indeg.set(s, indeg.get(s) - 1);
+      if (indeg.get(s) === 0) queue.push(s);
+    }
+  }
+  // Any node not reached (defensive, e.g. residual cycle) lands on layer 0.
+  let maxLayer = 0;
+  for (const n of nodes) maxLayer = Math.max(maxLayer, layer.get(n.id));
+  // Pin begin/finish bookends to the extremes (mirrors DOT rank=source/sink).
+  for (const n of nodes) {
+    if (n.kind === "begin") layer.set(n.id, 0);
+    else if (n.kind === "finish") layer.set(n.id, maxLayer);
+  }
+
+  // Group by layer, seed order by first appearance.
+  const byLayer = [];
+  for (const n of nodes) {
+    const l = layer.get(n.id);
+    (byLayer[l] || (byLayer[l] = [])).push(n.id);
+  }
+  for (let i = 0; i < byLayer.length; i++) if (!byLayer[i]) byLayer[i] = [];
+
+  // Barycenter sweeps to reduce crossings.
+  const posOf = id => byLayer[layer.get(id)].indexOf(id);
+  for (let sweep = 0; sweep < 4; sweep++) {
+    const downward = sweep % 2 === 0;
+    const range = downward
+      ? [...Array(byLayer.length).keys()]
+      : [...Array(byLayer.length).keys()].reverse();
+    for (const l of range) {
+      const neigh = downward ? pred : succ;
+      byLayer[l].sort((a, b) => bary(a, neigh, posOf) - bary(b, neigh, posOf));
+    }
+  }
+
+  // Assign coordinates. measure label widths first.
+  ctx.font = FONT;
+  for (const n of nodes) {
+    const label = n.name + (n.machines.length ? " [" + n.machines.join(", ") + "]" : "");
+    const w = Math.min(MAX_W, Math.max(MIN_W, ctx.measureText(label).width + PAD_X * 2));
+    n._w = w; n._h = NODE_H; n._label = label; n._layer = layer.get(n.id);
+  }
+  // Width of the widest layer, to center the others.
+  const layerSpan = byLayer.map(ids =>
+    ids.reduce((acc, id) => acc + nodeById.get(id)._w + NODE_GAP, -NODE_GAP));
+  const span = Math.max(1, ...layerSpan);
+  for (let l = 0; l < byLayer.length; l++) {
+    let cursor = (span - layerSpan[l]) / 2;
+    for (const id of byLayer[l]) {
+      const n = nodeById.get(id);
+      const along = cursor + n._w / 2;       // position within the layer axis
+      const across = l * LAYER_GAP;          // position across layers
+      if (RANKDIR === "LR") { n.x = across; n.y = along; }
+      else { n.x = along; n.y = across; }
+      cursor += n._w + NODE_GAP;
+    }
+  }
+  fitView();
+}
+function bary(id, neigh, posOf) {
+  const ns = neigh.get(id);
+  if (!ns || ns.length === 0) return posOf(id);
+  let s = 0;
+  for (const m of ns) s += posOf(m);
+  return s / ns.length;
+}
+
+// ---- transforms -----------------------------------------------------------
+function bounds() {
+  if (laid.length === 0) return { x: 0, y: 0, w: 1, h: 1 };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of laid) {
+    minX = Math.min(minX, n.x - n._w / 2);
+    maxX = Math.max(maxX, n.x + n._w / 2);
+    minY = Math.min(minY, n.y - n._h / 2);
+    maxY = Math.max(maxY, n.y + n._h / 2);
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+function fitView() {
+  const b = bounds();
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const pad = 60;
+  const scale = Math.min((cw - pad) / b.w, (ch - pad) / b.h, 1.4);
+  view.scale = isFinite(scale) && scale > 0 ? scale : 1;
+  view.offX = cw / 2 - (b.x + b.w / 2) * view.scale;
+  view.offY = ch / 2 - (b.y + b.h / 2) * view.scale;
+}
+function screenToWorld(px, py) {
+  return { x: (px - view.offX) / view.scale, y: (py - view.offY) / view.scale };
+}
+function nodeAt(px, py) {
+  const p = screenToWorld(px, py);
+  for (let i = laid.length - 1; i >= 0; i--) {
+    const n = laid[i];
+    if (Math.abs(p.x - n.x) <= n._w / 2 && Math.abs(p.y - n.y) <= n._h / 2) return n;
+  }
+  return null;
+}
+
+// ---- highlight (upstream + downstream of selected/hover) ------------------
+function relatedSet(rootId) {
+  const succ = new Map(), pred = new Map();
+  for (const n of laid) { succ.set(n.id, []); pred.set(n.id, []); }
+  for (const e of laidEdges) {
+    if (succ.has(e.from)) succ.get(e.from).push(e.to);
+    if (pred.has(e.to)) pred.get(e.to).push(e.from);
+  }
+  const out = new Set([rootId]);
+  for (const map of [succ, pred]) {
+    const stack = [rootId];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const nx of (map.get(cur) || [])) if (!out.has(nx)) { out.add(nx); stack.push(nx); }
+    }
+  }
+  return out;
+}
+function recomputeHighlight() {
+  const focus = hoverId || selectedId;
+  highlight = focus && nodeById.has(focus) ? relatedSet(focus) : null;
+}
+
+// ---- drawing --------------------------------------------------------------
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+// Clip the center->center segment at the target node's rectangle border.
+function edgeEnd(from, to) {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  if (dx === 0 && dy === 0) return { x: to.x, y: to.y };
+  const hw = to._w / 2, hh = to._h / 2;
+  const tx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
+  const ty = dy !== 0 ? hh / Math.abs(dy) : Infinity;
+  const t = Math.min(tx, ty);
+  return { x: to.x - dx * t, y: to.y - dy * t };
+}
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.offX, dpr * view.offY);
+
+  // edges
+  for (const e of laidEdges) {
+    const a = nodeById.get(e.from), b = nodeById.get(e.to);
+    if (!a || !b) continue;
+    const bright = !highlight || (highlight.has(a.id) && highlight.has(b.id));
+    const end = edgeEnd(a, b);
+    ctx.strokeStyle = bright ? "#7c8696" : "#d3d8e0";
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = bright ? 1.6 : 1;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    // arrowhead
+    const ang = Math.atan2(end.y - a.y, end.x - a.x);
+    const s = 7;
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x - s * Math.cos(ang - 0.4), end.y - s * Math.sin(ang - 0.4));
+    ctx.lineTo(end.x - s * Math.cos(ang + 0.4), end.y - s * Math.sin(ang + 0.4));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // nodes
+  for (const n of laid) {
+    const bright = !highlight || highlight.has(n.id);
+    const x = n.x - n._w / 2, y = n.y - n._h / 2;
+    ctx.globalAlpha = bright ? 1 : 0.25;
+    roundRect(x, y, n._w, n._h, 9);
+    ctx.fillStyle = kindColor(n.kind);
+    ctx.fill();
+    ctx.lineWidth = n.id === selectedId ? 3 : 1.4;
+    ctx.strokeStyle = n.id === selectedId ? "#3b82f6" : "rgba(0,0,0,.35)";
+    ctx.stroke();
+
+    ctx.fillStyle = "#1a1f29";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = FONT;
+    ctx.fillText(fit(n.name, n._w - PAD_X * 2), n.x, n.y - (n.machines.length ? 8 : 0));
+    if (n.machines.length) {
+      ctx.font = SUBFONT;
+      ctx.fillStyle = "#586173";
+      ctx.fillText(fit("[" + n.machines.join(", ") + "]", n._w - PAD_X * 2), n.x, n.y + 9);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+function fit(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+}
+
+// ---- side panel -----------------------------------------------------------
+function buildFilters() {
+  const machines = uniqueSorted(allNodes.flatMap(n => n.machines));
+  const tags = uniqueSorted(allNodes.flatMap(n => n.tags));
+  fillList("machines", machines, selMachines, "m-count", "no machines");
+  fillList("tags", tags, selTags, "t-count", "no tags");
+}
+function fillList(elId, values, sel, countId, emptyMsg) {
+  const host = document.getElementById(elId);
+  host.innerHTML = "";
+  document.getElementById(countId).textContent = values.length ? String(values.length) : "";
+  if (values.length === 0) {
+    const e = document.createElement("div");
+    e.className = "empty"; e.textContent = emptyMsg;
+    host.appendChild(e); return;
+  }
+  for (const v of values) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.value = v;
+    cb.addEventListener("change", () => {
+      if (cb.checked) sel.add(v); else sel.delete(v);
+      applyFilter();
+    });
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(v));
+    host.appendChild(label);
+  }
+}
+function renderDetails() {
+  const host = document.getElementById("details");
+  const n = selectedId ? nodeById.get(selectedId) : null;
+  if (!n) { host.innerHTML = '<div class="none">Click a node.</div>'; return; }
+  const chips = arr => arr.length
+    ? arr.map(v => '<span class="chip">' + esc(v) + "</span>").join("")
+    : '<span class="k">—</span>';
+  const deps = (n.deps || []).map(id => {
+    const d = allNodes.find(x => x.id === id);
+    return d ? d.name : id;
+  });
+  host.innerHTML =
+    '<div class="name">' + esc(n.name) + "</div>" +
+    '<div class="row"><span class="k">kind:</span> ' + esc(n.kind) + "</div>" +
+    (n.description ? '<div class="row"><span class="k">desc:</span> ' + esc(n.description) + "</div>" : "") +
+    '<div class="row"><span class="k">machines</span><br>' + chips(n.machines) + "</div>" +
+    '<div class="row"><span class="k">tags</span><br>' + chips(n.tags) + "</div>" +
+    '<div class="row"><span class="k">depends on</span><br>' + chips(deps) + "</div>";
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function buildLegend() {
+  const items = [["begin", "begin"], ["finish", "finish"], ["barrier", "barrier"],
+                 ["connect", "connect"], ["shell", "shell"], ["native", "native"]];
+  document.getElementById("legend").innerHTML = items.map(([k, label]) =>
+    '<span class="item"><span class="sw" style="background:' + kindColor(k) + '"></span>' + label + "</span>"
+  ).join("");
+}
+
+// ---- interaction ----------------------------------------------------------
+let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
+canvas.addEventListener("mousedown", e => {
+  dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY;
+  canvas.classList.add("panning");
+});
+window.addEventListener("mousemove", e => {
+  if (dragging) {
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    if (Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true;
+    view.offX += dx; view.offY += dy; lastX = e.clientX; lastY = e.clientY;
+    draw();
+    return;
+  }
+});
+window.addEventListener("mouseup", () => { dragging = false; canvas.classList.remove("panning"); });
+canvas.addEventListener("mousemove", e => {
+  if (dragging) return;
+  const r = canvas.getBoundingClientRect();
+  const n = nodeAt(e.clientX - r.left, e.clientY - r.top);
+  const id = n ? n.id : null;
+  canvas.style.cursor = id ? "pointer" : "grab";
+  if (id !== hoverId) { hoverId = id; recomputeHighlight(); draw(); }
+});
+canvas.addEventListener("mouseleave", () => {
+  if (hoverId !== null) { hoverId = null; recomputeHighlight(); draw(); }
+});
+canvas.addEventListener("click", e => {
+  if (dragMoved) return;
+  const r = canvas.getBoundingClientRect();
+  const n = nodeAt(e.clientX - r.left, e.clientY - r.top);
+  selectedId = n ? n.id : null;
+  recomputeHighlight();
+  renderDetails();
+  draw();
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const before = screenToWorld(mx, my);
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  view.scale = Math.min(4, Math.max(0.1, view.scale * factor));
+  // keep cursor anchored
+  view.offX = mx - before.x * view.scale;
+  view.offY = my - before.y * view.scale;
+  draw();
+}, { passive: false });
+
+document.getElementById("search").addEventListener("input", e => {
+  searchTerm = e.target.value.trim().toLowerCase();
+  if (!searchTerm) { return; }
+  const hit = laid.find(n => n.name.toLowerCase().includes(searchTerm));
+  if (hit) {
+    selectedId = hit.id;
+    recomputeHighlight();
+    renderDetails();
+    view.offX = canvas.clientWidth / 2 - hit.x * view.scale;
+    view.offY = canvas.clientHeight / 2 - hit.y * view.scale;
+    draw();
+  }
+});
+document.getElementById("reset").addEventListener("click", () => {
+  selMachines.clear(); selTags.clear();
+  searchTerm = ""; selectedId = null; hoverId = null;
+  document.getElementById("search").value = "";
+  document.querySelectorAll('.filter-list input').forEach(cb => { cb.checked = false; });
+  applyFilter();
+  fitView();
+  renderDetails();
+  draw();
+});
+
+// ---- canvas sizing --------------------------------------------------------
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  draw();
+}
+window.addEventListener("resize", resize);
+
+// ---- boot -----------------------------------------------------------------
+document.getElementById("counts").textContent =
+  allNodes.length + " node(s) · " + allEdges.length + " edge(s)";
+buildFilters();
+buildLegend();
+resize();
+applyFilter();
+fitView();
+draw();
+</script>
+</body>
+</html>

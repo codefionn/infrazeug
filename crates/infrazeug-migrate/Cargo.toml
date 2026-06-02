@@ -1,0 +1,19 @@
+[package]
+name = "infrazeug-migrate"
+description = "Import paths from Ansible and other legacy IaC (SOUL post-M6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ansible-vault = "0.2.1"
+infrazeug-secrets = { workspace = true }
+serde_cbor = { workspace = true }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+infrazeug-secrets = { workspace = true }

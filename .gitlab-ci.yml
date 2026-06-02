@@ -1,0 +1,129 @@
+# infrazeug — GitLab CI/CD
+#
+# Default pipeline (MRs, default branch, tags):
+#   fmt → check → clippy → test → release build (default branch / tags only)
+#
+# Heavy integration tests (QEMU, OCI, k3s) are manual on tagged runners:
+#   see job `infra-tests` and scripts/run-infra-tests.sh
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# hidapi (default `fido2-device` on infrazeug-cli / infrazeug-secrets-hw) needs libudev on Linux.
+.install_linux_build_deps:
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends libudev-dev pkg-config
+
+default:
+  image: rust:bookworm
+  interruptible: true
+  before_script:
+    - !reference [.install_linux_build_deps, before_script]
+    - rustc --version
+    - cargo --version
+
+variables:
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  CARGO_TARGET_DIR: ${CI_PROJECT_DIR}/target
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+.cargo_cache:
+  cache:
+    key:
+      files:
+        - Cargo.lock
+      prefix: cargo-v1
+    paths:
+      - .cargo/registry/
+      - .cargo/git/
+      - target/
+
+.rust_lint_setup:
+  before_script:
+    - !reference [.install_linux_build_deps, before_script]
+    - rustc --version
+    - cargo --version
+    - rustup component add rustfmt clippy
+
+stages:
+  - lint
+  - test
+  - build
+  - infra
+
+fmt:
+  stage: lint
+  extends:
+    - .cargo_cache
+    - .rust_lint_setup
+  script:
+    - cargo fmt --all -- --check
+
+clippy:
+  stage: lint
+  extends:
+    - .cargo_cache
+    - .rust_lint_setup
+  script:
+    - cargo clippy --workspace --all-targets -- -D warnings
+  allow_failure: true
+
+check:
+  stage: test
+  extends: .cargo_cache
+  script:
+    - cargo check --workspace --all-targets
+
+test:
+  stage: test
+  extends: .cargo_cache
+  script:
+    - cargo test --workspace
+
+build:release:
+  stage: build
+  extends: .cargo_cache
+  script:
+    - cargo build --workspace --release
+  artifacts:
+    paths:
+      - target/release/infrazeug
+      - target/release/infrazeug-agent
+      - target/release/infrazeug-bootstrap
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# Requires a runner with podman/docker, qemu-system-*, ~12 GiB RAM, and enough disk
+# for image pulls (see README and scripts/run-infra-tests.sh).
+infra-tests:
+  stage: infra
+  extends: .cargo_cache
+  tags:
+    - infrazeug-infra
+  variables:
+    INFRZEUG_CACHE_DIR: ${CI_PROJECT_DIR}/.cache/infrazeug
+  before_script:
+    - !reference [.install_linux_build_deps, before_script]
+    - rustc --version
+    - cargo --version
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends ca-certificates curl qemu-system-x86 qemu-utils genisoimage podman
+    - podman info || true
+    - qemu-system-x86_64 --version
+  script:
+    - chmod +x scripts/run-infra-tests.sh
+    - ./scripts/run-infra-tests.sh
+  timeout: 3h
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: on_success

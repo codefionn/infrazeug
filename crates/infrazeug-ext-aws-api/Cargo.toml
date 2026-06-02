@@ -1,0 +1,21 @@
+[package]
+name = "infrazeug-ext-aws-api"
+description = "AWS API client for infrazeug (EC2, S3, IAM via SigV4)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+hmac = "0.12"
+quick-xml = { version = "0.37", features = ["serialize"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { workspace = true }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+urlencoding = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

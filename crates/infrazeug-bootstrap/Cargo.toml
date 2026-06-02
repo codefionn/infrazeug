@@ -1,0 +1,15 @@
+[package]
+name = "infrazeug-bootstrap"
+description = "Tiny first-boot stub for pull-mode (SOUL §3.11.8)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "infrazeug-bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+infrazeug-api = { workspace = true }
+tokio.workspace = true

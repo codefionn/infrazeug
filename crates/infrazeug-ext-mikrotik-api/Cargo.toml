@@ -1,0 +1,16 @@
+[package]
+name = "infrazeug-ext-mikrotik-api"
+description = "MikroTik RouterOS API client for infrazeug (IP addresses, interfaces, firewall)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+thiserror.workspace = true
+tokio = { workspace = true }
+tokio-rustls = "0.26"
+webpki-roots = "0.26"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

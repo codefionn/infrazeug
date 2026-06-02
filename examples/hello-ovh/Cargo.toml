@@ -1,0 +1,15 @@
+[package]
+name = "hello-ovh"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+infrazeug-api = { workspace = true }
+infrazeug-core = { workspace = true }
+infrazeug-ovh = { workspace = true }
+infrazeug-secrets = { workspace = true }
+serde_cbor = { workspace = true }
+tokio.workspace = true
+uuid.workspace = true

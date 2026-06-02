@@ -1,0 +1,19 @@
+[package]
+name = "infrazeug-ext-ovh-api"
+description = "OVHcloud API client for infrazeug (domains, public cloud, backup, …)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { workspace = true }
+serde_json.workspace = true
+sha1 = "0.10"
+thiserror.workspace = true
+tokio = { workspace = true }
+urlencoding = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -1,0 +1,37 @@
+[package]
+name = "infrazeug-secrets-hw"
+description = "FIDO2 and PKCS#11 vault recipient providers (SOUL §6.3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64 = "0.22"
+hkdf.workspace = true
+infrazeug-secrets = { workspace = true }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+# Real PKCS#11 token support (off by default). Pure-Rust bindings that dlopen
+# the module at runtime, so this compiles in CI without a device attached.
+cryptoki = { version = "0.12", optional = true }
+
+# Real FIDO2 authenticator support (off by default). Talks CTAP2 hmac-secret to
+# a USB/NFC token via hidapi at runtime.
+ctap-hid-fido2 = { version = "3.5", optional = true }
+
+[features]
+default = ["fido2-device"]
+# Enable the real PKCS#11 device recipient (`Pkcs11Device`). Requires a
+# PKCS#11 module (`.so`) and an RSA key on the token at runtime.
+pkcs11-device = ["dep:cryptoki"]
+# Enable the real FIDO2 hmac-secret recipient (`Fido2Device`). On by default.
+# Builds without a device attached, but links hidapi (needs libudev on Linux).
+fido2-device = ["dep:ctap-hid-fido2"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

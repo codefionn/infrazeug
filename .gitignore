@@ -1,0 +1,12 @@
+/target/
+**/target/
+**/*.rs.bk
+.idea/
+.vscode/
+*.swp
+/.infrazeug
+/docs/impl
+/.claude/settings.local.json
+/examples/hello-vault/vault-store
+/.claude/scheduled_tasks.lock
+/.claude/worktrees/

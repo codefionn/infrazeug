@@ -1,0 +1,12 @@
+version = 1
+graph_digest = "sha256:84c2d4864a2f353d450777efceba5c9b89269a3aca53d5c41f0d8a2fbcc18c5f"
+
+[images]
+"docker.io/library/alpine:3.19" = "sha256:2e41168061e75f7ce2beb4ffcf31ae178a49a67f875a4989e0914c34fe84b3b4"
+"library/alpine:3.19" = "sha256:e10e4962cffb00dada1b763a3a53b68537c26651048765d6d18675a5e527b05d"
+
+[contexts]
+
+[specs]
+63c9ef2e39495e1b = "sha256:a0a0936805941dea54a48c71863e03fe482ad9a7c1cdf04297516470367f540d"
+f2d31bc283ecce61 = "sha256:4bad9ec06edcd1bdebfcc8212d603710814a08e4abce2f703a1bf28d4fa38ee9"

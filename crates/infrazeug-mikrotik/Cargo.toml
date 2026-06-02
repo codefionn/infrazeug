@@ -1,0 +1,22 @@
+[package]
+name = "infrazeug-mikrotik"
+description = "MikroTik RouterOS native nodes for infrazeug (tier-1 resource helpers on infrazeug-ext-mikrotik-api)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+infrazeug-api = { workspace = true }
+infrazeug-resource = { workspace = true }
+infrazeug-core = { workspace = true }
+infrazeug-ext-mikrotik-api = { workspace = true }
+infrazeug-native = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+uuid.workspace = true

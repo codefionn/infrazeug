@@ -1,0 +1,12 @@
+[package]
+name = "infrazeug-k8s"
+description = "Shared Kubernetes CLI context for infrazeug extension crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_cbor.workspace = true

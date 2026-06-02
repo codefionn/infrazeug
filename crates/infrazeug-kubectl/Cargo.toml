@@ -1,0 +1,15 @@
+[package]
+name = "infrazeug-kubectl"
+description = "kubectl integration for infrazeug (ShellOp tier-2, agentless-capable)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+infrazeug-k8s = { path = "../infrazeug-k8s" }
+infrazeug-shell = { workspace = true }
+
+[dev-dependencies]
+serde_cbor.workspace = true

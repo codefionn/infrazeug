@@ -1,0 +1,10 @@
+[package]
+name = "infrazeug-methods"
+description = "Built-in NodeMethod registry (shell, file.*)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+infrazeug-shell = { workspace = true }
+serde.workspace = true

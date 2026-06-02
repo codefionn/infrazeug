@@ -1,0 +1,14 @@
+[package]
+name = "infrazeug-templates-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Compile-time `template!` macro for infrazeug (render-to-String, rustc-typed)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn = { workspace = true, features = ["full", "parsing"] }

@@ -1,0 +1,190 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/infrazeug-core",
+    "crates/infrazeug-api",
+    "crates/infrazeug-shell",
+    "crates/infrazeug-methods",
+    "crates/infrazeug-native",
+    "crates/infrazeug-resource",
+    "crates/infrazeug-transport",
+    "crates/infrazeug-tui",
+    "crates/infrazeug-cli",
+    "crates/infrazeug-playbook",
+    "crates/infrazeug-rpc",
+    "crates/infrazeug-agent",
+    "crates/infrazeug-emulate",
+    "crates/infrazeug-emulate-oci",
+    "crates/infrazeug-emulate-qemu",
+    "crates/infrazeug-secrets",
+    "crates/infrazeug-secrets-ssh",
+    "crates/infrazeug-secrets-hw",
+    "crates/infrazeug-secrets-kms",
+    "crates/infrazeug-secrets-s3",
+    "crates/infrazeug-secrets-dav",
+    "crates/infrazeug-templates",
+    "crates/infrazeug-templates-macros",
+    "crates/infrazeug-k8s",
+    "crates/infrazeug-kubectl",
+    "crates/infrazeug-helm",
+    "crates/infrazeug-build",
+    "crates/infrazeug-pull",
+    "crates/infrazeug-bootstrap",
+    "crates/infrazeug-mcp",
+    "crates/infrazeug-doc-index",
+    "crates/infrazeug-migrate",
+    "crates/infrazeug-ext-ovh-api",
+    "crates/infrazeug-ext-openstack",
+    "crates/infrazeug-ovh",
+    "crates/infrazeug-openstack",
+    "crates/infrazeug-ext-ionos-cloud-api",
+    "crates/infrazeug-ionos",
+    "crates/infrazeug-ext-stackit-api",
+    "crates/infrazeug-stackit",
+    "crates/infrazeug-ext-aws-api",
+    "crates/infrazeug-aws",
+    "crates/infrazeug-ext-gcp-api",
+    "crates/infrazeug-gcp",
+    "crates/infrazeug-ext-azure-api",
+    "crates/infrazeug-azure",
+    "crates/infrazeug-ext-keycloak-admin",
+    "crates/infrazeug-keycloak",
+    "crates/infrazeug-ext-unifi-api",
+    "crates/infrazeug-unifi",
+    "crates/infrazeug-ext-mikrotik-api",
+    "crates/infrazeug-mikrotik",
+    "crates/infrazeug-ext-cloudflare-api",
+    "crates/infrazeug-cloudflare",
+    "crates/infrazeug-ext-backblaze-api",
+    "crates/infrazeug-backblaze",
+    "crates/infrazeug-ext-proxmox-api",
+    "crates/infrazeug-proxmox",
+    "examples/hello-local",
+    "examples/hello-multi-playbook",
+    "examples/hello-ssh",
+    "examples/hello-emulate",
+    "examples/hello-vault",
+    "examples/hello-qemu",
+    "examples/hello-pull",
+    "examples/hello-template",
+    "examples/hello-native",
+    "examples/hello-dynamic",
+    "examples/hello-ovh",
+    "examples/emulated-cluster",
+    "examples/mcp-unit-status",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/infrazeug/infrazeug"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+async-trait = "0.1"
+bytes = "1"
+crossterm = "0.29"
+futures = "0.3"
+hex = "0.4"
+petgraph = "0.7"
+postcard = { version = "1", features = ["alloc"] }
+ratatui = "0.29"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_cbor = "0.11"
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tar = "0.4"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+argon2 = "0.5"
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+rmcp = { version = "1", default-features = false, features = [
+    "server",
+    "client",
+    "transport-io",
+    "transport-async-rw",
+    "transport-streamable-http-server",
+    "transport-streamable-http-client-reqwest",
+] }
+schemars = "1"
+
+infrazeug-core = { path = "crates/infrazeug-core" }
+infrazeug-secrets = { path = "crates/infrazeug-secrets" }
+infrazeug-secrets-ssh = { path = "crates/infrazeug-secrets-ssh" }
+infrazeug-secrets-s3 = { path = "crates/infrazeug-secrets-s3" }
+infrazeug-api = { path = "crates/infrazeug-api" }
+infrazeug-shell = { path = "crates/infrazeug-shell" }
+infrazeug-methods = { path = "crates/infrazeug-methods" }
+infrazeug-native = { path = "crates/infrazeug-native" }
+infrazeug-resource = { path = "crates/infrazeug-resource" }
+infrazeug-transport = { path = "crates/infrazeug-transport" }
+infrazeug-tui = { path = "crates/infrazeug-tui" }
+infrazeug-cli = { path = "crates/infrazeug-cli" }
+infrazeug-rpc = { path = "crates/infrazeug-rpc" }
+infrazeug-build = { path = "crates/infrazeug-build" }
+infrazeug-emulate = { path = "crates/infrazeug-emulate" }
+infrazeug-emulate-oci = { path = "crates/infrazeug-emulate-oci" }
+infrazeug-emulate-qemu = { path = "crates/infrazeug-emulate-qemu" }
+infrazeug-secrets-hw = { path = "crates/infrazeug-secrets-hw" }
+infrazeug-secrets-kms = { path = "crates/infrazeug-secrets-kms" }
+infrazeug-secrets-dav = { path = "crates/infrazeug-secrets-dav" }
+infrazeug-pull = { path = "crates/infrazeug-pull" }
+infrazeug-bootstrap = { path = "crates/infrazeug-bootstrap" }
+infrazeug-k8s = { path = "crates/infrazeug-k8s" }
+infrazeug-kubectl = { path = "crates/infrazeug-kubectl" }
+infrazeug-helm = { path = "crates/infrazeug-helm" }
+infrazeug-templates = { path = "crates/infrazeug-templates" }
+infrazeug-templates-macros = { path = "crates/infrazeug-templates-macros" }
+infrazeug-migrate = { path = "crates/infrazeug-migrate" }
+infrazeug-mcp = { path = "crates/infrazeug-mcp" }
+infrazeug-doc-index = { path = "crates/infrazeug-doc-index" }
+infrazeug-ext-ovh-api = { path = "crates/infrazeug-ext-ovh-api" }
+infrazeug-ext-openstack = { path = "crates/infrazeug-ext-openstack" }
+infrazeug-ovh = { path = "crates/infrazeug-ovh" }
+infrazeug-openstack = { path = "crates/infrazeug-openstack" }
+infrazeug-ext-ionos-cloud-api = { path = "crates/infrazeug-ext-ionos-cloud-api" }
+infrazeug-ionos = { path = "crates/infrazeug-ionos" }
+infrazeug-ext-stackit-api = { path = "crates/infrazeug-ext-stackit-api" }
+infrazeug-stackit = { path = "crates/infrazeug-stackit" }
+infrazeug-ext-aws-api = { path = "crates/infrazeug-ext-aws-api" }
+infrazeug-aws = { path = "crates/infrazeug-aws" }
+infrazeug-ext-gcp-api = { path = "crates/infrazeug-ext-gcp-api" }
+infrazeug-gcp = { path = "crates/infrazeug-gcp" }
+infrazeug-ext-azure-api = { path = "crates/infrazeug-ext-azure-api" }
+infrazeug-azure = { path = "crates/infrazeug-azure" }
+infrazeug-ext-keycloak-admin = { path = "crates/infrazeug-ext-keycloak-admin" }
+infrazeug-keycloak = { path = "crates/infrazeug-keycloak" }
+infrazeug-ext-unifi-api = { path = "crates/infrazeug-ext-unifi-api" }
+infrazeug-unifi = { path = "crates/infrazeug-unifi" }
+infrazeug-ext-mikrotik-api = { path = "crates/infrazeug-ext-mikrotik-api" }
+infrazeug-mikrotik = { path = "crates/infrazeug-mikrotik" }
+infrazeug-ext-cloudflare-api = { path = "crates/infrazeug-ext-cloudflare-api" }
+infrazeug-cloudflare = { path = "crates/infrazeug-cloudflare" }
+infrazeug-ext-backblaze-api = { path = "crates/infrazeug-ext-backblaze-api" }
+infrazeug-backblaze = { path = "crates/infrazeug-backblaze" }
+infrazeug-ext-proxmox-api = { path = "crates/infrazeug-ext-proxmox-api" }
+infrazeug-proxmox = { path = "crates/infrazeug-proxmox" }
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+lto = "thin"

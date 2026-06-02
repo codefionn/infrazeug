@@ -1,0 +1,8 @@
+[package]
+name = "infrazeug-build"
+description = "infrazeug-agent cross-compile (zigbuild/cargo)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

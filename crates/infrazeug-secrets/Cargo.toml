@@ -1,0 +1,31 @@
+[package]
+name = "infrazeug-secrets"
+description = "Encrypted vault store (SOUL §6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_cbor.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+ed25519-dalek.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+x25519-dalek.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+bytes.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

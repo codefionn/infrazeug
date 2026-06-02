@@ -1,0 +1,5 @@
+error: `@for` header `x y` is missing `in`
+ --> tests/ui/for_missing_in.rs:5:23
+  |
+5 |     let _ = template!("@for x y {z}");
+  |                       ^^^^^^^^^^^^^^

@@ -1,0 +1,15 @@
+[package]
+name = "infrazeug-tui"
+description = "ratatui interactive controller (M1 MVP)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+crossterm.workspace = true
+infrazeug-core = { workspace = true }
+ratatui.workspace = true
+tokio.workspace = true
+tracing.workspace = true

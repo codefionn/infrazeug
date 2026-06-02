@@ -1,0 +1,51 @@
+[package]
+name = "infrazeug-cli"
+description = "infrazeug command-line tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "infrazeug_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "infrazeug"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+infrazeug-api = { workspace = true }
+infrazeug-build = { path = "../infrazeug-build" }
+infrazeug-core = { workspace = true }
+infrazeug-secrets = { workspace = true }
+infrazeug-secrets-dav = { path = "../infrazeug-secrets-dav" }
+infrazeug-secrets-hw = { path = "../infrazeug-secrets-hw" }
+infrazeug-secrets-kms = { path = "../infrazeug-secrets-kms" }
+infrazeug-secrets-s3 = { workspace = true }
+infrazeug-secrets-ssh = { path = "../infrazeug-secrets-ssh" }
+infrazeug-tui = { workspace = true }
+infrazeug-shell = { workspace = true }
+infrazeug-pull = { workspace = true }
+infrazeug-migrate = { workspace = true }
+infrazeug-playbook = { path = "../infrazeug-playbook" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+hex.workspace = true
+bytes.workspace = true
+serde_yaml = "0.9"
+tempfile = "3"
+sha2.workspace = true
+serde.workspace = true
+rpassword = "7"
+dialoguer = "0.12"
+
+[features]
+default = ["fido2-device"]
+# Use a real FIDO2 authenticator (CTAP2 hmac-secret) for `--new-kind fido2`
+# enrollment and `--fido2-device` unlock, instead of the deterministic fixture.
+# On by default; opt out with `--no-default-features` (links hidapi on Linux).
+fido2-device = ["infrazeug-secrets-hw/fido2-device"]

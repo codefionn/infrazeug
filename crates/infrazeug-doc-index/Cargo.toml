@@ -1,0 +1,17 @@
+[package]
+name = "infrazeug-doc-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Extract a searchable JSON index from `cargo doc` HTML for MCP"
+
+[[bin]]
+name = "infrazeug-doc-index"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+scraper = "0.23"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+walkdir = "2"

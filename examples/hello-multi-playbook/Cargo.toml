@@ -1,0 +1,17 @@
+[package]
+name = "hello-multi-playbook"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "hello-multi-playbook"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+infrazeug-api = { path = "../../crates/infrazeug-api" }
+infrazeug-core = { path = "../../crates/infrazeug-core" }
+infrazeug-shell = { path = "../../crates/infrazeug-shell" }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }

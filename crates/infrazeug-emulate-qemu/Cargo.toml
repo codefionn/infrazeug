@@ -1,0 +1,23 @@
+[package]
+name = "infrazeug-emulate-qemu"
+description = "QEMU/KVM microVM emulation (SOUL §5.2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+infrazeug-core = { workspace = true }
+infrazeug-emulate = { path = "../infrazeug-emulate" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "net", "fs", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+infrazeug-shell = { workspace = true }
+infrazeug-transport = { path = "../infrazeug-transport" }
+tempfile = "3"
+tokio-util.workspace = true

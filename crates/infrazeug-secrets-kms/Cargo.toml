@@ -1,0 +1,21 @@
+[package]
+name = "infrazeug-secrets-kms"
+description = "age and KMS vault recipient providers (SOUL §6.3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+age = "0.11"
+async-trait.workspace = true
+hex.workspace = true
+hkdf.workspace = true
+infrazeug-secrets = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

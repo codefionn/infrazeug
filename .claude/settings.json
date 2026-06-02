@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(INFRZEUG_K3S_STACK_TEST=1 cargo test *)",
+      "Bash(rg *)"
+    ]
+  }
+}

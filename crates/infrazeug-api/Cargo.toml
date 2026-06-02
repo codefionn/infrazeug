@@ -1,0 +1,41 @@
+[package]
+name = "infrazeug-api"
+description = "Public builder API for infrazeug embedders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+atty = "0.2"
+clap.workspace = true
+tracing-subscriber.workspace = true
+infrazeug-build = { path = "../infrazeug-build" }
+infrazeug-emulate = { path = "../infrazeug-emulate" }
+infrazeug-emulate-oci = { path = "../infrazeug-emulate-oci" }
+infrazeug-emulate-qemu = { path = "../infrazeug-emulate-qemu" }
+infrazeug-secrets-dav = { path = "../infrazeug-secrets-dav" }
+infrazeug-secrets-kms = { path = "../infrazeug-secrets-kms" }
+futures.workspace = true
+hex.workspace = true
+infrazeug-core = { workspace = true }
+infrazeug-native = { workspace = true }
+infrazeug-mcp = { workspace = true }
+infrazeug-pull = { workspace = true }
+infrazeug-secrets = { workspace = true }
+infrazeug-shell = { workspace = true }
+infrazeug-templates = { workspace = true }
+infrazeug-transport = { path = "../infrazeug-transport" }
+infrazeug-tui = { workspace = true }
+serde.workspace = true
+serde_cbor.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v5"] }
+
+[dev-dependencies]
+serde_json.workspace = true

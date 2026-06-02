@@ -1,0 +1,16 @@
+[package]
+name = "infrazeug-rpc"
+description = "Postcard-framed RPC for infrazeug-agent (SOUL §4.1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+infrazeug-native = { workspace = true }
+infrazeug-shell = { workspace = true }
+postcard.workspace = true
+serde.workspace = true
+serde_cbor.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
