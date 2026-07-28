@@ -447,7 +447,8 @@ impl VaultStore {
         let dek = self.dek(&data_key_id)?;
         let (_header, map) = decrypt_map(dek.as_ref(), &bytes)?;
         let plain = serde_cbor::to_vec(&map)?;
-        self.file_cache.insert(file.to_string(), Zeroizing::new(plain));
+        self.file_cache
+            .insert(file.to_string(), Zeroizing::new(plain));
         Ok(map)
     }
 

@@ -109,6 +109,6 @@ mod tests {
             .unwrap();
         let entry = &envelope.recipients[0];
         let unlocked = unlock_envelope(&envelope, &provider, entry).await.unwrap();
-        assert_eq!(unlocked.as_ref(), &dek);
+        assert_eq!(&*unlocked, &dek);
     }
 }

@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-age = "0.11"
+age = "0.12"
 async-trait.workspace = true
 hex.workspace = true
 hkdf.workspace = true
