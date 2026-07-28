@@ -26,14 +26,31 @@ pub async fn vault_edit_file(
     let yaml_body = vault_map_to_yaml(&map).map_err(map_migrate_err)?;
     let before = format!("{EDIT_HEADER}{yaml_body}");
 
-    let tmp = tempfile::Builder::new()
+    // Decrypted YAML lives in a private 0700 temp dir so no other local user
+    // can read it — including editor swap/backup files, which editors create
+    // next to the edited file and which are removed when the dir is dropped.
+    let tmp_dir = tempfile::Builder::new()
         .prefix("infrazeug-vault-edit-")
-        .suffix(".yml")
-        .tempfile()
-        .context("create temp file for vault edit")?;
-    let tmp_path = tmp.path().to_path_buf();
+        .tempdir()
+        .context("create temp dir for vault edit")?;
+    #[cfg(unix)]
     {
-        let mut f = std::fs::File::create(&tmp_path)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tmp_dir.path(), std::fs::Permissions::from_mode(0o700))
+            .context("chmod vault edit temp dir")?;
+    }
+    let tmp_path = tmp_dir.path().join("vault.yml");
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts
+            .open(&tmp_path)
+            .context("create temp file for vault edit")?;
         f.write_all(before.as_bytes())?;
     }
 

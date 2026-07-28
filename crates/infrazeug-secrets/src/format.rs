@@ -125,10 +125,9 @@ pub fn decrypt_map(dek: &[u8], blob: &[u8]) -> Result<(VaultHeader, BTreeMap<Str
     }
     let header = parse_vault_header_cbor(&blob[9..])?;
     let hlen = u32::from_be_bytes(blob[9..13].try_into().unwrap()) as usize;
-    let expected = header_aad_hash(&header);
-    if expected != header.aad_hash {
-        return Err(SecretsError::Format("aad tamper".into()));
-    }
+    // No separate `aad_hash` check: the header (including `aad_hash`) is the
+    // AEAD AAD, so any tampering fails tag verification below. Checking the
+    // hash first would only add a redundant, error-distinguishing oracle.
     let ct = &blob[13 + hlen..];
     let key = Key::from_slice(dek);
     let cipher = XChaCha20Poly1305::new(key);

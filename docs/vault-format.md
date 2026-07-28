@@ -91,7 +91,7 @@ offset  size  field
 | `wrapped_key` | bytes | Provider-specific sealed DEK material |
 | `params` | JSON object | Provider metadata (e.g. FIDO credential id, Argon2 params) |
 
-**Envelope authentication (`auth`)**: XChaCha20-Poly1305 over the canonical CBOR of the envelope with `auth` cleared, keyed by HKDF(DEK). Detects recipient tampering or reordering. Legacy envelopes without `auth` are upgraded automatically on the first successful unlock.
+**Envelope authentication (`auth`)**: XChaCha20-Poly1305 over the canonical CBOR of the envelope with `auth` cleared, keyed by `SHA-256("infrazeug-envelope-auth-v1" || DEK)`. Detects recipient tampering or reordering. Legacy envelopes without `auth` are upgraded automatically on the first successful unlock.
 
 ## Vault file (`files/.../*.vault`)
 
@@ -111,7 +111,7 @@ offset  size  field
 | `data_key_id` | string |
 | `content_type` | string (e.g. `application/cbor`) |
 | `nonce` | 24 bytes |
-| `aad_hash` | SHA-256 of canonical header with `aad_hash` zeroed |
+| `aad_hash` | SHA-256 of canonical header with `aad_hash` zeroed (kept for format compatibility; integrity is enforced by the AEAD tag, which covers the whole header as AAD — there is no separate hash check on read) |
 | `file_salt` | 32 bytes |
 
 **Plaintext body**: CBOR map (`string` keys; values: nested maps, lists, bytes, strings, ints, bools, null). Field paths use dot notation (`db.host`, `items.0`).
@@ -152,6 +152,21 @@ the resulting bytes into a mutable vault field.
 | New vault writes | Vault file v2 | Every write with current code | Yes |
 
 Future vault-file versions can add new `version` bytes; loaders should migrate or reject explicitly.
+
+## Security considerations
+
+- **Memory hygiene**: DEKs and passphrases are held in `Zeroizing` wrappers and
+  scrubbed on drop / `lock_all`. The decrypted file cache stores canonical CBOR
+  plaintext in `Zeroizing<Vec<u8>>` for the same reason. Decoded value maps
+  handed to callers are ordinary heap data and are not zeroized.
+- **No memory locking**: keys and plaintext are not `mlock`ed; they can reach
+  swap or core dumps on a compromised or misconfigured host. Run on hosts with
+  encrypted swap / disabled core dumps if that is in your threat model.
+- **Writes**: the local backend writes via O_EXCL temp files (mode `0600`,
+  dirs `0700`), fsyncs the payload, renames atomically, and fsyncs the parent
+  directory. CLI `vault edit` stages plaintext in a private `0700` temp dir.
+- **Legacy envelopes** without `auth` are trusted until the first unlock
+  re-seals them; treat stores from untrusted writers accordingly.
 
 ## Related code
 

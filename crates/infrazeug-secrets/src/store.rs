@@ -30,7 +30,10 @@ pub struct VaultStore {
     pub backend: Arc<dyn Backend>,
     pub store_root: PathBuf,
     unlocked: HashMap<String, Zeroizing<[u8; 32]>>,
-    file_cache: HashMap<String, BTreeMap<String, Value>>,
+    /// Decrypted vault-file plaintext as canonical CBOR, wrapped in `Zeroizing`
+    /// so cached secrets are scrubbed on drop and by `lock_all`. (The decoded
+    /// `Value` map cannot be zeroized, so it is never cached.)
+    file_cache: HashMap<String, Zeroizing<Vec<u8>>>,
     store_ready: AtomicBool,
 }
 
@@ -432,7 +435,7 @@ impl VaultStore {
 
     pub async fn read_vault_map(&mut self, file: &str) -> Result<BTreeMap<String, Value>> {
         if let Some(cached) = self.file_cache.get(file) {
-            return Ok(cached.clone());
+            return Ok(serde_cbor::from_slice(cached)?);
         }
         let key = Self::key_path(file);
         let (bytes, _) = self
@@ -443,7 +446,8 @@ impl VaultStore {
         let data_key_id = parse_data_key_id(&bytes)?;
         let dek = self.dek(&data_key_id)?;
         let (_header, map) = decrypt_map(dek.as_ref(), &bytes)?;
-        self.file_cache.insert(file.to_string(), map.clone());
+        let plain = serde_cbor::to_vec(&map)?;
+        self.file_cache.insert(file.to_string(), Zeroizing::new(plain));
         Ok(map)
     }
 

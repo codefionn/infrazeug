@@ -80,13 +80,22 @@ impl FsBackend {
         file.write_all(data)
             .await
             .map_err(|e| SecretsError::Backend(e.to_string()))?;
-        file.flush()
+        // fsync the payload before rename so a crash cannot leave the target
+        // pointing at data that never reached stable storage.
+        file.sync_all()
             .await
             .map_err(|e| SecretsError::Backend(e.to_string()))?;
         drop(file);
         tokio::fs::rename(&tmp, path)
             .await
             .map_err(|e| SecretsError::Backend(e.to_string()))?;
+        // fsync the parent directory so the rename itself is durable.
+        #[cfg(unix)]
+        {
+            std::fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| SecretsError::Backend(e.to_string()))?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
