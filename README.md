@@ -102,3 +102,7 @@ Operational semantics worth reading before writing multi-node workflows:
 - [Run policy and change policy](docs/run-policy.md)
 - [Runnable surface](docs/runnable.md)
 - [Vault on-disk format](docs/vault-format.md)
+
+## AI Disclosure
+
+This project is being developed with AI assistance.
