@@ -1,0 +1,23 @@
+[package]
+name = "infrazeug-netbird"
+description = "NetBird native nodes for infrazeug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+infrazeug-api.workspace = true
+infrazeug-core.workspace = true
+infrazeug-ext-netbird-api.workspace = true
+infrazeug-native.workspace = true
+infrazeug-resource.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+uuid.workspace = true

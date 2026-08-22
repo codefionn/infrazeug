@@ -2,8 +2,9 @@
 
 use crate::client::CloudflareClientSource;
 use crate::methods::{
-    ensure_dns_record, ensure_firewall_access_rule, ensure_kv_namespace, ensure_r2_bucket,
-    ensure_waf_custom_rule, ensure_zone_setting, EnsureDnsRecord, EnsureDnsRecordInput,
+    ensure_dns_record, ensure_dns_record_absent, ensure_firewall_access_rule, ensure_kv_namespace,
+    ensure_r2_bucket, ensure_waf_custom_rule, ensure_zone_setting, EnsureDnsRecord,
+    EnsureDnsRecordAbsent, EnsureDnsRecordAbsentInput, EnsureDnsRecordInput,
     EnsureFirewallAccessRule, EnsureFirewallAccessRuleInput, EnsureKvNamespace,
     EnsureKvNamespaceInput, EnsureR2Bucket, EnsureR2BucketInput, EnsureWafCustomRule,
     EnsureWafCustomRuleInput, EnsureZoneSetting, EnsureZoneSettingInput,
@@ -71,6 +72,7 @@ impl CloudflareInfraBuilder {
     ) -> Self {
         let builder = builder
             .method(ensure_dns_record(source.clone()))
+            .method(ensure_dns_record_absent(source.clone()))
             .method(ensure_zone_setting(source.clone()))
             .method(ensure_firewall_access_rule(source.clone()))
             .method(ensure_waf_custom_rule(source.clone()))
@@ -92,6 +94,56 @@ impl CloudflareInfraBuilder {
         let builder = self
             .builder
             .native_typed::<EnsureDnsRecord>(node_id, name, self.machine_id, input)?
+            .always()
+            .build()?;
+        Ok(Self {
+            builder,
+            machine_id: self.machine_id,
+        })
+    }
+
+    /// Ensure no DNS records with this exact name and type remain.
+    pub fn ensure_dns_record_absent(
+        self,
+        node_id: NodeId,
+        name: &str,
+        input: EnsureDnsRecordAbsentInput,
+    ) -> anyhow::Result<Self> {
+        self.ensure_dns_record_absent_with_deps(node_id, name, input, [])
+    }
+
+    /// Like [`ensure_dns_record_absent`](Self::ensure_dns_record_absent), with prerequisites.
+    pub fn ensure_dns_record_absent_with_deps(
+        self,
+        node_id: NodeId,
+        name: &str,
+        input: EnsureDnsRecordAbsentInput,
+        deps: impl IntoIterator<Item = NodeId>,
+    ) -> anyhow::Result<Self> {
+        let builder = self
+            .builder
+            .native_typed::<EnsureDnsRecordAbsent>(node_id, name, self.machine_id, input)?
+            .deps(deps)
+            .always()
+            .build()?;
+        Ok(Self {
+            builder,
+            machine_id: self.machine_id,
+        })
+    }
+
+    /// Like [`ensure_dns_record`](Self::ensure_dns_record), with prerequisites.
+    pub fn ensure_dns_record_with_deps(
+        self,
+        node_id: NodeId,
+        name: &str,
+        input: EnsureDnsRecordInput,
+        deps: impl IntoIterator<Item = NodeId>,
+    ) -> anyhow::Result<Self> {
+        let builder = self
+            .builder
+            .native_typed::<EnsureDnsRecord>(node_id, name, self.machine_id, input)?
+            .deps(deps)
             .always()
             .build()?;
         Ok(Self {
@@ -227,6 +279,30 @@ mod tests {
                     record_type: "A".into(),
                     content: "192.0.2.1".into(),
                     proxied: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .finish();
+
+        bundle.plan().expect("lint + plan");
+    }
+
+    #[test]
+    fn ensure_dns_record_absent_plans() {
+        let local = MachineId(Uuid::new_v4());
+        let node = NodeId(Uuid::new_v4());
+        let bundle = InfraBuilder::new()
+            .machine(builder::controller(local))
+            .unwrap()
+            .cloudflare(dummy_client(), local)
+            .ensure_dns_record_absent(
+                node,
+                "wildcard-a-absent",
+                EnsureDnsRecordAbsentInput {
+                    zone_name: Some("example.com".into()),
+                    name: "*.example.com".into(),
+                    record_type: "A".into(),
                     ..Default::default()
                 },
             )

@@ -2,6 +2,7 @@
 
 mod account;
 mod dns_record;
+mod dns_record_absent;
 mod firewall_access_rule;
 mod kv_namespace;
 mod r2_bucket;
@@ -12,6 +13,10 @@ mod zone_setting;
 pub use dns_record::{
     ensure_dns_record, EnsureDnsRecord, EnsureDnsRecordInput, EnsureDnsRecordOutput,
     ENSURE_DNS_RECORD,
+};
+pub use dns_record_absent::{
+    ensure_dns_record_absent, EnsureDnsRecordAbsent, EnsureDnsRecordAbsentInput,
+    EnsureDnsRecordAbsentOutput, ENSURE_DNS_RECORD_ABSENT,
 };
 pub use firewall_access_rule::{
     ensure_firewall_access_rule, EnsureFirewallAccessRule, EnsureFirewallAccessRuleInput,

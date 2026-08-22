@@ -138,6 +138,26 @@ impl KeycloakInfraBuilder {
         })
     }
 
+    /// Ensure an OIDC client after its provider is reachable.
+    pub fn ensure_client_after(
+        self,
+        node_id: NodeId,
+        name: &str,
+        input: EnsureClientInput,
+        deps: impl IntoIterator<Item = NodeId>,
+    ) -> anyhow::Result<Self> {
+        let builder = self
+            .builder
+            .native_typed::<EnsureClient>(node_id, name, self.machine_id, input)?
+            .deps(deps)
+            .always()
+            .build()?;
+        Ok(Self {
+            builder,
+            machine_id: self.machine_id,
+        })
+    }
+
     /// Ensure a *client* role exists on an OIDC client (create or reconcile).
     ///
     /// A client role's path is keyed by the client's uuid, so this must run after the client

@@ -59,6 +59,8 @@ members = [
     "crates/infrazeug-backblaze",
     "crates/infrazeug-ext-proxmox-api",
     "crates/infrazeug-proxmox",
+    "crates/infrazeug-ext-netbird-api",
+    "crates/infrazeug-netbird",
     "examples/hello-local",
     "examples/hello-multi-playbook",
     "examples/hello-ssh",
@@ -182,6 +184,8 @@ infrazeug-ext-backblaze-api = { path = "crates/infrazeug-ext-backblaze-api" }
 infrazeug-backblaze = { path = "crates/infrazeug-backblaze" }
 infrazeug-ext-proxmox-api = { path = "crates/infrazeug-ext-proxmox-api" }
 infrazeug-proxmox = { path = "crates/infrazeug-proxmox" }
+infrazeug-ext-netbird-api = { path = "crates/infrazeug-ext-netbird-api" }
+infrazeug-netbird = { path = "crates/infrazeug-netbird" }
 
 [profile.dev]
 opt-level = 0
