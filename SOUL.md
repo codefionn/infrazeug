@@ -55,6 +55,10 @@ crates/
   infrazeug-secrets-dav/  #   WebDAV backend
   infrazeug-shell/        # ShellOp DSL (typed builder, lowering, agent interpreter)
   infrazeug-methods/      # Tier-1 native NodeMethod registry + helpers
+  infrazeug-ext-zitadel-api/   # Zitadel HTTP API client
+  infrazeug-zitadel/           # Zitadel native resources and playbook builder
+  infrazeug-ext-authentik-api/ # Authentik HTTP API client
+  infrazeug-authentik/         # Authentik native resources and playbook builder
   infrazeug-templates/        # Compile-time `template!` macro re-export + render/escape helpers
   infrazeug-templates-macros/ #   proc-macro crate implementing `template!` (Rust-native, rustc-typed)
   infrazeug-build/        # Cross-compile + agent binary build (zigbuild/cross/native)

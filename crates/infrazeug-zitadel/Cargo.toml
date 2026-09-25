@@ -1,0 +1,21 @@
+[package]
+name = "infrazeug-zitadel"
+description = "ZITADEL native resource nodes for infrazeug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+infrazeug-api.workspace = true
+infrazeug-core.workspace = true
+infrazeug-ext-zitadel-api.workspace = true
+infrazeug-native.workspace = true
+infrazeug-resource.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+uuid.workspace = true

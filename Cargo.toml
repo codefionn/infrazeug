@@ -49,6 +49,10 @@ members = [
     "crates/infrazeug-azure",
     "crates/infrazeug-ext-keycloak-admin",
     "crates/infrazeug-keycloak",
+    "crates/infrazeug-ext-zitadel-api",
+    "crates/infrazeug-zitadel",
+    "crates/infrazeug-ext-authentik-api",
+    "crates/infrazeug-authentik",
     "crates/infrazeug-ext-unifi-api",
     "crates/infrazeug-unifi",
     "crates/infrazeug-ext-mikrotik-api",
@@ -174,6 +178,10 @@ infrazeug-ext-azure-api = { path = "crates/infrazeug-ext-azure-api" }
 infrazeug-azure = { path = "crates/infrazeug-azure" }
 infrazeug-ext-keycloak-admin = { path = "crates/infrazeug-ext-keycloak-admin" }
 infrazeug-keycloak = { path = "crates/infrazeug-keycloak" }
+infrazeug-ext-zitadel-api = { path = "crates/infrazeug-ext-zitadel-api" }
+infrazeug-zitadel = { path = "crates/infrazeug-zitadel" }
+infrazeug-ext-authentik-api = { path = "crates/infrazeug-ext-authentik-api" }
+infrazeug-authentik = { path = "crates/infrazeug-authentik" }
 infrazeug-ext-unifi-api = { path = "crates/infrazeug-ext-unifi-api" }
 infrazeug-unifi = { path = "crates/infrazeug-unifi" }
 infrazeug-ext-mikrotik-api = { path = "crates/infrazeug-ext-mikrotik-api" }

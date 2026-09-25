@@ -2404,6 +2404,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "infrazeug-authentik"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "infrazeug-api",
+ "infrazeug-core",
+ "infrazeug-ext-authentik-api",
+ "infrazeug-native",
+ "infrazeug-resource",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "infrazeug-aws"
 version = "0.1.0"
 dependencies = [
@@ -2614,6 +2631,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "infrazeug-ext-authentik-api"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "infrazeug-ext-aws-api"
 version = "0.1.0"
 dependencies = [
@@ -2787,6 +2816,18 @@ dependencies = [
 
 [[package]]
 name = "infrazeug-ext-unifi-api"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
+name = "infrazeug-ext-zitadel-api"
 version = "0.1.0"
 dependencies = [
  "reqwest 0.12.28",
@@ -3299,6 +3340,23 @@ dependencies = [
  "infrazeug-api",
  "infrazeug-core",
  "infrazeug-ext-unifi-api",
+ "infrazeug-native",
+ "infrazeug-resource",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "infrazeug-zitadel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "infrazeug-api",
+ "infrazeug-core",
+ "infrazeug-ext-zitadel-api",
  "infrazeug-native",
  "infrazeug-resource",
  "serde",

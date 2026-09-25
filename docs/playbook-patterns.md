@@ -1155,6 +1155,8 @@ Symbols the playbook consumes from the framework, grouped by concern. The crate 
 | `OvhInfraExt` / `BackupStack` (`with_mutable_vault`/`with_node_name_prefix`/`*_node_id`/`ensure_backup_stack`) | `infrazeug-ovh` | declarative OVH backup buckets + IAM + vault capture |
 | `UnifiInfraExt` / `UnifiInfraBuilder::new` / `UnifiClientSource` / `EnsureDnsRecordInput` | `infrazeug-unifi` | declarative UniFi DNS / appliance config (constructed via `::new`, not a builder method) |
 | `KeycloakInfraExt` / `keycloak_vault_password` | `infrazeug-keycloak` | declarative Keycloak clients/roles + secret capture |
+| `ZitadelInfraExt` / `zitadel_vault` | `infrazeug-zitadel` | projects, OIDC apps, project roles, and human users; [usage](../crates/infrazeug-zitadel/README.md) |
+| `AuthentikInfraExt` / `authentik_vault` | `infrazeug-authentik` | users, groups, applications, and OAuth2 providers; [usage](../crates/infrazeug-authentik/README.md) |
 
 ---
 
