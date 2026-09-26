@@ -9,18 +9,14 @@ use crate::run::{
 };
 use anyhow::Context;
 use infrazeug_mcp::WatchProxy;
-use notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-
-const DEBOUNCE_MS: u64 = 400;
 
 enum ServeOutcome {
     Restart,
@@ -248,36 +244,39 @@ async fn stop_child(child: &mut Child) {
 fn install_source_watcher(
     manifest_dir: &Path,
     change_tx: mpsc::UnboundedSender<()>,
-) -> anyhow::Result<Debouncer<notify::RecommendedWatcher>> {
-    let manifest_dir = manifest_dir.to_path_buf();
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(DEBOUNCE_MS),
-        move |result: DebounceEventResult| {
-            let Ok(events) = result else { return };
-            if events.iter().any(|e| is_source_change(&e.path)) {
-                let _ = change_tx.send(());
-            }
-        },
-    )
+) -> anyhow::Result<RecommendedWatcher> {
+    // Watch with the raw notify API (not a debouncer) so access events can be
+    // filtered out: the watch loop's own `cargo build` *reads* `Cargo.toml` and
+    // `src/`, and treating those IN_OPEN/IN_ACCESS events as changes makes the
+    // loop rebuild itself forever. Only content/metadata changes restart the
+    // MCP server. Rapid duplicate events collapse in the watch loop's
+    // `change_rx.try_recv()` drains, so no extra debounce is needed.
+    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+        let Ok(event) = result else { return };
+        if matches!(event.kind, EventKind::Access(_)) {
+            return;
+        }
+        if event.paths.iter().any(|p| is_source_change(p)) {
+            let _ = change_tx.send(());
+        }
+    })
     .context("create file watcher")?;
 
     let src = manifest_dir.join("src");
     if src.is_dir() {
-        debouncer
-            .watcher()
+        watcher
             .watch(&src, RecursiveMode::Recursive)
             .context("watch src/")?;
     }
     for name in ["Cargo.toml", "build.rs"] {
         let path = manifest_dir.join(name);
         if path.is_file() {
-            debouncer
-                .watcher()
+            watcher
                 .watch(&path, RecursiveMode::NonRecursive)
                 .context("watch manifest")?;
         }
     }
-    Ok(debouncer)
+    Ok(watcher)
 }
 
 fn is_source_change(path: &Path) -> bool {
