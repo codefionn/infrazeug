@@ -53,6 +53,8 @@ pub struct TransportFactory {
     /// Per-triple build guards so concurrent connect nodes of the same triple
     /// cross-compile the agent once.
     build_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Only one caller may establish a backend for a machine at a time.
+    connect_locks: Mutex<HashMap<MachineId, Arc<Mutex<()>>>>,
 }
 
 impl TransportFactory {
@@ -69,6 +71,7 @@ impl TransportFactory {
             ssh_resolver: Mutex::new(None),
             release,
             build_locks: Mutex::new(HashMap::new()),
+            connect_locks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -235,6 +238,14 @@ impl TransportFactory {
     }
 
     async fn backend_for(&self, infra: &Infra, machine_id: MachineId) -> Result<()> {
+        let lock = {
+            let mut locks = self.connect_locks.lock().await;
+            locks
+                .entry(machine_id)
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = lock.lock().await;
         {
             let map = self.backends.lock().await;
             if map.contains_key(&machine_id) {
@@ -613,25 +624,6 @@ impl TransportFactory {
     }
 
     async fn lazy_prepare_backend(&self, infra: &Infra, machine_id: MachineId) -> Result<()> {
-        use crate::ssh::probe_uname_machine;
-
-        let machine = infra
-            .machine_by_id(machine_id)
-            .ok_or_else(|| TransportError::Other(format!("unknown machine {machine_id}")))?;
-        let choice = infra.transport_for_machine(machine);
-
-        if choice == TransportChoice::SshAgentPush {
-            if let MachineKind::Remote { ssh, os } = &machine.kind {
-                let uname = os.as_ref().and_then(|h| h.arch.clone());
-                if uname.is_none() {
-                    let askpass = self.askpass_for(machine_id, ssh).await?;
-                    let probed = probe_uname_machine(ssh, askpass.as_deref()).await?;
-                    let triple = infrazeug_build::uname_machine_to_triple(&probed);
-                    self.machine_triples.lock().await.insert(machine_id, triple);
-                }
-            }
-        }
-
         self.backend_for(infra, machine_id).await
     }
 }

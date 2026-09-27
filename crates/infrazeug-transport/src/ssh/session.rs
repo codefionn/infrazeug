@@ -295,12 +295,27 @@ impl SshSession {
 
     /// Push bytes with `scp` (one file, works with mux; no TTY required).
     pub async fn upload_bytes(&self, remote_path: &str, data: &[u8], mode: u32) -> Result<()> {
+        let tmp = self
+            .run_dir
+            .join(format!(".infrazeug-upload-{}", uuid::Uuid::new_v4()));
+        if let Err(err) = tokio::fs::write(&tmp, data).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(TransportError::Other(err.to_string()));
+        }
+        let result = self.upload_file(remote_path, &tmp, mode).await;
+        let _ = tokio::fs::remove_file(&tmp).await;
+        result
+    }
+
+    /// Push an existing local file directly through `scp`, without copying it
+    /// into the run directory first.
+    pub async fn upload_file(&self, remote_path: &str, local_path: &Path, mode: u32) -> Result<()> {
         let remote_abs = self.expand_remote_path(remote_path).await?;
         let dest = self.destination();
         info!(
             dest = %dest,
             path = %remote_abs,
-            bytes = data.len(),
+            local = %local_path.display(),
             "uploading file via scp"
         );
 
@@ -319,41 +334,34 @@ impl SshSession {
             }
         }
 
-        let tmp = format!(
-            "{}/.infrazeug-upload-{}",
-            self.run_dir.display(),
-            uuid::Uuid::new_v4()
-        );
-        tokio::fs::write(&tmp, data)
-            .await
-            .map_err(|e| TransportError::Other(e.to_string()))?;
-
         // Stage beside the final path, then rename into place. Direct scp onto an
         // in-use executable fails with "dest open … Failure" (ETXTBSY) when a prior
         // agent is still serving from that path.
         let staging = format!("{}.infrazeug-staging-{}", remote_abs, uuid::Uuid::new_v4());
         let scp_target = format!("{dest}:{staging}");
-        let upload = async {
-            let mut cmd = Command::new("scp");
-            for a in self.base_ssh_args() {
-                cmd.arg(a);
+        let mut cmd = Command::new("scp");
+        for a in self.base_ssh_args() {
+            cmd.arg(a);
+        }
+        cmd.arg("-q").arg(local_path).arg(&scp_target);
+        cmd.kill_on_drop(true);
+        self.apply_askpass_env(&mut cmd);
+        let output = match timeout(Duration::from_secs(300), cmd.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(err)) => {
+                self.remove_staging(&staging).await;
+                return Err(TransportError::Other(format!("scp: {err}")));
             }
-            cmd.arg("-q").arg(&tmp).arg(&scp_target);
-            self.apply_askpass_env(&mut cmd);
-            cmd.output()
-                .await
-                .map_err(|e| TransportError::Other(format!("scp: {e}")))
+            Err(_) => {
+                self.remove_staging(&staging).await;
+                return Err(TransportError::Other(format!(
+                    "scp upload to {remote_abs} timed out"
+                )));
+            }
         };
 
-        let output = timeout(Duration::from_secs(300), upload)
-            .await
-            .map_err(|_| {
-                TransportError::Other(format!("scp upload to {remote_abs} timed out"))
-            })??;
-
-        let _ = tokio::fs::remove_file(&tmp).await;
-
         if !output.status.success() {
+            self.remove_staging(&staging).await;
             return Err(TransportError::Other(format!(
                 "scp to {remote_abs} failed (exit {:?}): {}",
                 output.status.code(),
@@ -361,23 +369,34 @@ impl SshSession {
             )));
         }
 
-        let (code, _, stderr) = self
+        let result = self
             .exec_remote(&[format!(
                 "chmod {mode:o} {staging} && mv -f {staging} {final_path}",
                 staging = shell_escape(&staging),
                 final_path = shell_escape(&remote_abs)
             )])
-            .await?;
+            .await;
+        let (code, _, stderr) = match result {
+            Ok(output) => output,
+            Err(err) => {
+                self.remove_staging(&staging).await;
+                return Err(err);
+            }
+        };
         if code != 0 {
-            let _ = self
-                .exec_remote(&[format!("rm -f {}", shell_escape(&staging))])
-                .await;
+            self.remove_staging(&staging).await;
             return Err(TransportError::Other(format!(
                 "remote chmod+mv into place failed (exit {code}): {}",
                 String::from_utf8_lossy(&stderr)
             )));
         }
         Ok(())
+    }
+
+    async fn remove_staging(&self, staging: &str) {
+        let _ = self
+            .exec_remote(&[format!("rm -f {}", shell_escape(staging))])
+            .await;
     }
 
     /// Sync a controller-local directory to a remote directory over the existing
@@ -508,10 +527,7 @@ impl SshSession {
                             return Ok(exec_output(out));
                         }
                     } else {
-                        let data = tokio::fs::read(local_src.join(rel))
-                            .await
-                            .map_err(|e| TransportError::Other(e.to_string()))?;
-                        self.upload_bytes(&path, &data, *mode).await?;
+                        self.upload_file(&path, &local_src.join(rel), *mode).await?;
                     }
                 }
                 SyncDirEntry::Symlink { rel, target } => {
@@ -829,5 +845,104 @@ mod tests {
             .base_ssh_args()
             .windows(2)
             .any(|pair| pair == ["-o", "Port=3890"]));
+    }
+
+    #[tokio::test]
+    async fn upload_file_uses_source_directly_and_upload_bytes_cleans_its_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct RestoreEnv {
+            path: Option<std::ffi::OsString>,
+            scp_log: Option<std::ffi::OsString>,
+        }
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                if let Some(path) = self.path.take() {
+                    std::env::set_var("PATH", path);
+                } else {
+                    std::env::remove_var("PATH");
+                }
+                if let Some(log) = self.scp_log.take() {
+                    std::env::set_var("SCP_LOG", log);
+                } else {
+                    std::env::remove_var("SCP_LOG");
+                }
+            }
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("infrazeug-upload-test-{}", uuid::Uuid::new_v4()));
+        let bin = root.join("bin");
+        let run = root.join("run");
+        let remote = root.join("remote");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::create_dir_all(&remote).unwrap();
+        // The last argument to ssh is the remote shell command. scp records its
+        // real source and stages the bytes at the target path.
+        std::fs::write(
+            bin.join("ssh"),
+            "#!/bin/sh\nfor arg do command=$arg; done\nexec /bin/sh -c \"$command\"\n",
+        )
+        .unwrap();
+        std::fs::write(bin.join("scp"), "#!/bin/sh\nfor arg do source=$target; target=$arg; done\nprintf '%s\\n%s\\n' \"$source\" \"$target\" >> \"$SCP_LOG\"\n/bin/cp \"$source\" \"${target#*:}\"\n").unwrap();
+        for executable in ["ssh", "scp"] {
+            std::fs::set_permissions(bin.join(executable), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        let log = root.join("scp.log");
+        let old_path = std::env::var_os("PATH");
+        let _restore_env = RestoreEnv {
+            path: old_path.clone(),
+            scp_log: std::env::var_os("SCP_LOG"),
+        };
+        let mut path = bin.as_os_str().to_os_string();
+        if let Some(old) = old_path {
+            path.push(":");
+            path.push(old);
+        }
+        std::env::set_var("PATH", path);
+        std::env::set_var("SCP_LOG", &log);
+
+        let session = SshSession::new(SshConfig::new("localhost"), &run);
+        let source = root.join("source with spaces");
+        let final_path = remote.join("final");
+        std::fs::write(&source, b"direct file").unwrap();
+        std::fs::write(&final_path, b"old file").unwrap();
+        session
+            .upload_file(final_path.to_str().unwrap(), &source, 0o640)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"direct file");
+        assert_eq!(
+            std::fs::metadata(&final_path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+
+        session
+            .upload_bytes(final_path.to_str().unwrap(), b"in memory", 0o600)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"in memory");
+        let calls: Vec<_> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], source.display().to_string());
+        assert!(calls[1].starts_with(&format!(
+            "localhost:{}.infrazeug-staging-",
+            final_path.display()
+        )));
+        assert!(calls[2].starts_with(&format!("{}/.infrazeug-upload-", run.display())));
+        assert!(!Path::new(&calls[2]).exists());
+        assert!(calls[3].starts_with(&format!(
+            "localhost:{}.infrazeug-staging-",
+            final_path.display()
+        )));
+        assert_eq!(std::fs::read_dir(&remote).unwrap().count(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

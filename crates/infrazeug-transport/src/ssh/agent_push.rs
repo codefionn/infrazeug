@@ -5,9 +5,12 @@ use infrazeug_core::id::NodeId;
 use infrazeug_core::node::NodeStatus;
 use infrazeug_rpc::{AgentMetrics, RpcNodeGraphEntry, RpcNodeStatus};
 use infrazeug_shell::local::{ExecOutput, OutputChunk};
+use infrazeug_shell::lower::shell_escape;
 use infrazeug_shell::{plan_sync_dir, FileSource, Result as ShellResult, ShellError, ShellOp};
 use infrazeug_shell::{SyncDirEntry, SyncDirOptions};
+use sha2::{Digest, Sha256};
 use std::path::Path;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -43,19 +46,21 @@ impl AgentPushBackend {
         }
 
         let dest = session.destination();
-        let remote_name = format!("agent-{AGENT_VERSION}");
+        let remote_name = agent_remote_name(&agent_local).await?;
         let home = session.remote_home().await?;
         let remote_bin = format!("{home}/{AGENT_REMOTE_DIR}/{remote_name}");
 
-        let len = tokio::fs::metadata(&agent_local)
-            .await
-            .map_err(|e| TransportError::Other(e.to_string()))?
-            .len();
-        tracing::debug!(%dest, %remote_bin, bytes = len, "pushing infrazeug-agent");
-        let data = tokio::fs::read(&agent_local)
-            .await
-            .map_err(|e| TransportError::Other(e.to_string()))?;
-        session.upload_bytes(&remote_bin, &data, 0o755).await?;
+        let (code, _, stderr) = session
+            .exec_remote(&[format!("test -x {}", shell_escape(&remote_bin))])
+            .await?;
+        if should_upload_agent(code, &stderr)? {
+            tracing::debug!(%dest, %remote_bin, "uploading infrazeug-agent");
+            session
+                .upload_file(&remote_bin, &agent_local, 0o755)
+                .await?;
+        } else {
+            tracing::debug!(%dest, %remote_bin, "reusing cached infrazeug-agent");
+        }
 
         tracing::debug!(%dest, "starting agent serve-rpc");
         let mut cmd = Command::new("ssh");
@@ -65,7 +70,7 @@ impl AgentPushBackend {
         cmd.arg("-T");
         cmd.arg(&dest);
         cmd.arg("--");
-        cmd.arg(format!("{remote_bin} serve-rpc"));
+        cmd.arg(format!("{} serve-rpc", shell_escape(&remote_bin)));
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -240,6 +245,36 @@ impl AgentPushBackend {
     }
 }
 
+async fn agent_remote_name(agent_local: &Path) -> Result<String> {
+    let mut file = tokio::fs::File::open(agent_local)
+        .await
+        .map_err(|e| TransportError::Other(e.to_string()))?;
+    let mut hash = Sha256::new();
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| TransportError::Other(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    Ok(format!("agent-{AGENT_VERSION}-{:x}", hash.finalize()))
+}
+
+fn should_upload_agent(code: i32, stderr: &[u8]) -> Result<bool> {
+    match code {
+        0 => Ok(false),
+        1 if stderr.is_empty() => Ok(true),
+        _ => Err(TransportError::Other(format!(
+            "remote agent cache check failed (exit {code}): {}",
+            String::from_utf8_lossy(stderr)
+        ))),
+    }
+}
+
 fn contains_sync_dir(op: &ShellOp) -> bool {
     match op {
         ShellOp::SyncDir { .. } => true,
@@ -257,5 +292,36 @@ fn rpc_node_status(status: NodeStatus) -> RpcNodeStatus {
         NodeStatus::Skipped => RpcNodeStatus::Skipped,
         NodeStatus::Failed => RpcNodeStatus::Failed,
         NodeStatus::Cancelled => RpcNodeStatus::Cancelled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn agent_path_tracks_binary_content() {
+        let path =
+            std::env::temp_dir().join(format!("infrazeug-agent-hash-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, b"abc").await.unwrap();
+        let first = agent_remote_name(&path).await.unwrap();
+        assert_eq!(
+            first,
+            format!(
+                "agent-{AGENT_VERSION}-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            )
+        );
+        tokio::fs::write(&path, b"abcd").await.unwrap();
+        let second = agent_remote_name(&path).await.unwrap();
+        tokio::fs::remove_file(&path).await.unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn warm_cache_skips_upload_and_cache_miss_uploads() {
+        assert!(!should_upload_agent(0, b"").unwrap());
+        assert!(should_upload_agent(1, b"").unwrap());
+        assert!(should_upload_agent(255, b"connection lost").is_err());
+        assert!(should_upload_agent(1, b"remote shell failed").is_err());
     }
 }
