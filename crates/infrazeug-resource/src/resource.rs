@@ -176,6 +176,12 @@ pub enum ResourceError {
     /// Any provider/API failure, already rendered to a string.
     #[error("{0}")]
     Provider(String),
+    /// A provider/API failure that may succeed when retried: HTTP 5xx, 429, 408,
+    /// timeouts and dropped connections. [`EnsureResource`](crate::EnsureResource)
+    /// re-runs the whole observe → converge step on these, so a create that failed
+    /// halfway is observed again instead of being blindly repeated.
+    #[error("{0}")]
+    Transient(String),
 }
 
 impl ResourceError {
@@ -183,6 +189,32 @@ impl ResourceError {
     pub fn provider(msg: impl std::fmt::Display) -> Self {
         Self::Provider(msg.to_string())
     }
+
+    /// Wrap a provider/ext error message that is worth retrying.
+    pub fn transient(msg: impl std::fmt::Display) -> Self {
+        Self::Transient(msg.to_string())
+    }
+
+    /// Wrap an HTTP API failure, classified by status code via
+    /// [`is_transient_http_status`].
+    pub fn http(status: u16, msg: impl std::fmt::Display) -> Self {
+        if is_transient_http_status(status) {
+            Self::transient(msg)
+        } else {
+            Self::provider(msg)
+        }
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Transient(_))
+    }
+}
+
+/// Whether an HTTP status usually clears up on its own: 408, 425, 429 and 5xx
+/// except 501 (Not Implemented) and 505 (HTTP Version Not Supported).
+pub fn is_transient_http_status(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429)
+        || ((500..600).contains(&status) && !matches!(status, 501 | 505))
 }
 
 impl From<ResourceError> for NativeError {

@@ -31,7 +31,11 @@ mod adapter;
 mod resource;
 
 pub use adapter::EnsureResource;
-pub use resource::{Drift, Resource, ResourceCtx, ResourceError, ResourceInput, ResourceResult};
+pub use adapter::TransientRetry;
+pub use resource::{
+    is_transient_http_status, Drift, Resource, ResourceCtx, ResourceError, ResourceInput,
+    ResourceResult,
+};
 
 #[cfg(test)]
 mod tests {
@@ -175,6 +179,105 @@ mod tests {
             json.pointer("/region").and_then(|v| v.as_str()),
             Some("SBG")
         );
+    }
+
+    /// Resource whose `observe` fails with `err` for the first `failures` calls.
+    struct Flaky {
+        failures: Mutex<u32>,
+        observes: Mutex<u32>,
+        err: fn() -> ResourceError,
+    }
+
+    impl Flaky {
+        fn new(failures: u32, err: fn() -> ResourceError) -> Self {
+            Self {
+                failures: Mutex::new(failures),
+                observes: Mutex::new(0),
+                err,
+            }
+        }
+        fn observes(&self) -> u32 {
+            *self.observes.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl Resource for Flaky {
+        type Spec = Spec;
+        type State = State;
+
+        fn kind(&self) -> &'static str {
+            "test.flaky"
+        }
+
+        async fn observe(&self, _ctx: &ResourceCtx, spec: &Spec) -> ResourceResult<Option<State>> {
+            *self.observes.lock().unwrap() += 1;
+            let mut failures = self.failures.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                return Err((self.err)());
+            }
+            Ok(Some(State {
+                id: "existing".into(),
+                region: spec.region.clone(),
+            }))
+        }
+
+        async fn create(&self, _ctx: &ResourceCtx, _spec: &Spec) -> ResourceResult<State> {
+            unreachable!("flaky resource is always present once observable")
+        }
+    }
+
+    fn fast_retry(attempts: u32) -> TransientRetry {
+        TransientRetry {
+            attempts,
+            initial_delay: std::time::Duration::ZERO,
+            max_delay: std::time::Duration::ZERO,
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_errors_are_retried_until_success() {
+        let m = EnsureResource::new(Flaky::new(2, || ResourceError::http(500, "api error 500")))
+            .with_transient_retry(fast_retry(3));
+        let res = m.execute(&node_ctx(), spec("GRA")).await.unwrap();
+        assert_eq!(res.status, NativeStatus::Unchanged);
+        assert_eq!(m.inner().observes(), 3);
+        assert_eq!(
+            m.plan(&plan_ctx(), &spec("GRA")).await.unwrap(),
+            PlanMethodOutcome::Unchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_errors_give_up_after_budget() {
+        let m = EnsureResource::new(Flaky::new(9, || ResourceError::http(503, "api error 503")))
+            .with_transient_retry(fast_retry(3));
+        let err = m.execute(&node_ctx(), spec("GRA")).await.unwrap_err();
+        assert_eq!(m.inner().observes(), 3);
+        assert!(
+            err.to_string().contains("gave up after 3 attempts"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn permanent_errors_fail_without_retry() {
+        let m = EnsureResource::new(Flaky::new(1, || ResourceError::http(403, "forbidden")))
+            .with_transient_retry(fast_retry(3));
+        let err = m.execute(&node_ctx(), spec("GRA")).await.unwrap_err();
+        assert_eq!(m.inner().observes(), 1);
+        assert_eq!(err.to_string(), "forbidden");
+    }
+
+    #[test]
+    fn transient_http_statuses() {
+        for s in [408, 425, 429, 500, 502, 503, 504] {
+            assert!(is_transient_http_status(s), "{s}");
+        }
+        for s in [0, 200, 400, 401, 403, 404, 409, 501, 505] {
+            assert!(!is_transient_http_status(s), "{s}");
+        }
     }
 
     /// Minimal in-memory secret source for context-threading tests.

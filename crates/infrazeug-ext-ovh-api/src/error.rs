@@ -35,3 +35,18 @@ pub enum OvhError {
     #[error("invalid ovh url: {0}")]
     Url(String),
 }
+
+impl OvhError {
+    /// Whether retrying the same call may succeed: dropped connections and
+    /// timeouts, and HTTP 408/425/429/5xx (except 501/505) answers.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Http(e) => e.is_timeout() || e.is_connect() || e.is_request() || e.is_body(),
+            Self::Api { status, .. } => {
+                matches!(status, 408 | 425 | 429)
+                    || ((500..600).contains(status) && !matches!(status, 501 | 505))
+            }
+            Self::Json(_) | Self::Url(_) => false,
+        }
+    }
+}

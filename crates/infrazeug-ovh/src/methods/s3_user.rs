@@ -4,7 +4,7 @@ use crate::client::OvhClientSource;
 use async_trait::async_trait;
 use infrazeug_ext_ovh_api::public_cloud::{CloudProjectUser, CloudProjectUserCreate};
 use infrazeug_ext_ovh_api::{OvhClient, OvhError};
-use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceError, ResourceResult};
+use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceResult};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -74,7 +74,7 @@ impl Resource for S3UserResource {
         let client = self.source.client(ctx).await?;
         let Some(user) = find_user(client.as_ref(), &spec.project_id, &spec.description)
             .await
-            .map_err(ResourceError::provider)?
+            .map_err(crate::client::ovh_error)?
         else {
             return Ok(None);
         };
@@ -91,7 +91,7 @@ impl Resource for S3UserResource {
         let creds = client
             .cloud_project_user_s3_credentials(&spec.project_id, &user_id)
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         match creds.first() {
             // The secret is only ever returned at credential creation, so an
             // already-existing credential exposes the access-key id (`access`) only.
@@ -116,7 +116,7 @@ impl Resource for S3UserResource {
         // it lacked a credential or was still provisioning), otherwise create it.
         let user = match find_user(client.as_ref(), &spec.project_id, &spec.description)
             .await
-            .map_err(ResourceError::provider)?
+            .map_err(crate::client::ovh_error)?
         {
             Some(user) => user,
             None => client
@@ -128,7 +128,7 @@ impl Resource for S3UserResource {
                     },
                 )
                 .await
-                .map_err(ResourceError::provider)?,
+                .map_err(crate::client::ovh_error)?,
         };
         let user_id = user.id.to_string();
 
@@ -136,21 +136,21 @@ impl Resource for S3UserResource {
         // it reaches `ok`, so wait for it before issuing/listing credentials.
         wait_user_ready(client.as_ref(), &spec.project_id, &user_id)
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
 
         // Reuse an existing credential (access key only) or issue a new one
         // (access key + secret, the single time the secret is returned).
         let creds = client
             .cloud_project_user_s3_credentials(&spec.project_id, &user_id)
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         let (access_key_id, secret_access_key) = if let Some(existing) = creds.first() {
             (Some(existing.access.clone()), None)
         } else {
             let cred = client
                 .cloud_project_user_s3_credential_create(&spec.project_id, &user_id)
                 .await
-                .map_err(ResourceError::provider)?;
+                .map_err(crate::client::ovh_error)?;
             (Some(cred.access), Some(cred.secret))
         };
 

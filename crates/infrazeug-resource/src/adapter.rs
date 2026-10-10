@@ -1,11 +1,53 @@
 //! [`EnsureResource`] — turns any [`Resource`] into a tier-1 [`NodeMethod`].
 
-use crate::resource::{Drift, Resource, ResourceError};
+use crate::resource::{Drift, Resource, ResourceCtx, ResourceError, ResourceResult};
 use async_trait::async_trait;
 use infrazeug_native::{
     encode_input, NativeError, NativeResult, NodeCtx, NodeMethod, PlanCtx, PlanMethodOutcome,
     Result,
 };
+use std::time::Duration;
+
+/// How often [`EnsureResource`] retries a [`ResourceError::Transient`] failure.
+///
+/// The default makes 5 attempts with 2s, 4s, 8s and 16s pauses in between
+/// (about 30s of waiting), which rides out a short provider hiccup without
+/// stalling the run for long when the provider is really down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransientRetry {
+    /// Total attempts, including the first. `1` disables retrying.
+    pub attempts: u32,
+    /// Pause after the first failure; doubles each attempt up to `max_delay`.
+    pub initial_delay: Duration,
+    pub max_delay: Duration,
+}
+
+impl Default for TransientRetry {
+    fn default() -> Self {
+        Self {
+            attempts: 5,
+            initial_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(30),
+        }
+    }
+}
+
+impl TransientRetry {
+    pub fn off() -> Self {
+        Self {
+            attempts: 1,
+            ..Self::default()
+        }
+    }
+
+    /// Pause after failed attempt number `attempt` (1-based).
+    fn delay(&self, attempt: u32) -> Duration {
+        let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+        self.initial_delay
+            .saturating_mul(factor)
+            .min(self.max_delay)
+    }
+}
 
 /// Adapter that drives a [`Resource`] through the converge loop and exposes it
 /// as a [`NodeMethod`].
@@ -15,16 +57,98 @@ use infrazeug_native::{
 /// absent or reconciles when drifted, and always attaches the live state as both
 /// the node output and a JSON capture (for downstream vault writes). Marked
 /// idempotent so `RetryMode::Auto` may retry it.
-pub struct EnsureResource<R: Resource>(R);
+///
+/// Both run the whole step again on [`ResourceError::Transient`], per
+/// [`TransientRetry`]. Retrying starts over at `observe`, so a create that the
+/// provider half-finished before failing is seen as present (or drifted) on the
+/// next attempt rather than created twice.
+pub struct EnsureResource<R: Resource> {
+    inner: R,
+    retry: TransientRetry,
+}
 
 impl<R: Resource> EnsureResource<R> {
     pub fn new(inner: R) -> Self {
-        Self(inner)
+        Self {
+            inner,
+            retry: TransientRetry::default(),
+        }
+    }
+
+    /// Override the transient-error retry policy (chainable).
+    pub fn with_transient_retry(mut self, retry: TransientRetry) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// Borrow the wrapped resource (handy for provider registries/tests).
     pub fn inner(&self) -> &R {
-        &self.0
+        &self.inner
+    }
+
+    async fn plan_once(
+        &self,
+        rctx: &ResourceCtx,
+        spec: &R::Spec,
+    ) -> ResourceResult<PlanMethodOutcome> {
+        Ok(match self.inner.observe(rctx, spec).await? {
+            None => PlanMethodOutcome::Changed,
+            Some(current) => match self.inner.diff(spec, &current) {
+                Drift::InSync => PlanMethodOutcome::Unchanged,
+                Drift::Drifted(_) => PlanMethodOutcome::Changed,
+            },
+        })
+    }
+
+    async fn converge_once(
+        &self,
+        rctx: &ResourceCtx,
+        spec: &R::Spec,
+    ) -> ResourceResult<(R::State, NativeResult)> {
+        let kind = self.inner.kind();
+        Ok(match self.inner.observe(rctx, spec).await? {
+            None => {
+                let state = self.inner.create(rctx, spec).await?;
+                (state, NativeResult::changed(format!("created {kind}")))
+            }
+            Some(current) => match self.inner.diff(spec, &current) {
+                Drift::InSync => (current, NativeResult::unchanged(format!("{kind} in sync"))),
+                Drift::Drifted(why) => {
+                    let state = self.inner.reconcile(rctx, spec, current).await?;
+                    (
+                        state,
+                        NativeResult::changed(format!("reconciled {kind}: {why}")),
+                    )
+                }
+            },
+        })
+    }
+
+    /// Sleep before the next attempt if `err` is transient and attempts remain.
+    /// Returns `false` when the caller should give up.
+    async fn back_off(&self, err: &ResourceError, attempt: u32) -> bool {
+        if !err.is_transient() || attempt >= self.retry.attempts {
+            return false;
+        }
+        let delay = self.retry.delay(attempt);
+        tracing::warn!(
+            kind = self.inner.kind(),
+            attempt,
+            max_attempts = self.retry.attempts,
+            ?delay,
+            error = %err,
+            "transient resource error, retrying"
+        );
+        tokio::time::sleep(delay).await;
+        true
+    }
+
+    fn give_up(&self, err: ResourceError, attempt: u32) -> NativeError {
+        if attempt > 1 {
+            NativeError::other(format!("{err} (gave up after {attempt} attempts)"))
+        } else {
+            err.into()
+        }
     }
 }
 
@@ -34,7 +158,7 @@ impl<R: Resource> NodeMethod for EnsureResource<R> {
     type Output = R::State;
 
     fn name(&self) -> &'static str {
-        self.0.kind()
+        self.inner.kind()
     }
 
     fn idempotent(&self) -> bool {
@@ -43,40 +167,30 @@ impl<R: Resource> NodeMethod for EnsureResource<R> {
 
     async fn plan(&self, ctx: &PlanCtx, spec: &Self::Input) -> Result<PlanMethodOutcome> {
         let rctx = ctx.into();
-        match self.0.observe(&rctx, spec).await {
-            Ok(None) => Ok(PlanMethodOutcome::Changed),
-            Ok(Some(current)) => Ok(match self.0.diff(spec, &current) {
-                Drift::InSync => PlanMethodOutcome::Unchanged,
-                Drift::Drifted(_) => PlanMethodOutcome::Changed,
-            }),
-            // A read-only preview without an unlocked vault cannot observe a
-            // credential-backed resource; report it as unknown rather than failing.
-            Err(ResourceError::SecretsUnavailable | ResourceError::InputsUnavailable) => {
-                Ok(PlanMethodOutcome::Unknown)
+        let mut attempt = 1;
+        loop {
+            match self.plan_once(&rctx, spec).await {
+                Ok(outcome) => return Ok(outcome),
+                // A read-only preview without an unlocked vault cannot observe a
+                // credential-backed resource; report it as unknown rather than failing.
+                Err(ResourceError::SecretsUnavailable | ResourceError::InputsUnavailable) => {
+                    return Ok(PlanMethodOutcome::Unknown)
+                }
+                Err(e) if self.back_off(&e, attempt).await => attempt += 1,
+                Err(e) => return Err(self.give_up(e, attempt)),
             }
-            Err(e) => Err(e.into()),
         }
     }
 
     async fn execute(&self, ctx: &NodeCtx, spec: Self::Input) -> Result<NativeResult> {
         let rctx = ctx.into();
-        let kind = self.0.kind();
-
-        let (state, result) = match self.0.observe(&rctx, &spec).await? {
-            None => {
-                let state = self.0.create(&rctx, &spec).await?;
-                (state, NativeResult::changed(format!("created {kind}")))
+        let mut attempt = 1;
+        let (state, result) = loop {
+            match self.converge_once(&rctx, &spec).await {
+                Ok(done) => break done,
+                Err(e) if self.back_off(&e, attempt).await => attempt += 1,
+                Err(e) => return Err(self.give_up(e, attempt)),
             }
-            Some(current) => match self.0.diff(&spec, &current) {
-                Drift::InSync => (current, NativeResult::unchanged(format!("{kind} in sync"))),
-                Drift::Drifted(why) => {
-                    let state = self.0.reconcile(&rctx, &spec, current).await?;
-                    (
-                        state,
-                        NativeResult::changed(format!("reconciled {kind}: {why}")),
-                    )
-                }
-            },
         };
 
         let output = encode_input(&state)?;

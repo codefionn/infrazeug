@@ -62,7 +62,7 @@ impl Resource for S3UserPolicyResource {
         let client = self.source.client(ctx).await?;
         let Some(user) = find_user(client.as_ref(), &spec.project_id, &spec.user_description)
             .await
-            .map_err(ResourceError::provider)?
+            .map_err(crate::client::ovh_error)?
         else {
             return Ok(None);
         };
@@ -74,7 +74,7 @@ impl Resource for S3UserPolicyResource {
         let policy = client
             .cloud_project_user_s3_policy(&spec.project_id, &user_id)
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(Some(EnsureS3UserPolicyOutput {
             user_id,
             policy: canonical_policy(&policy.policy)?,
@@ -112,7 +112,7 @@ impl S3UserPolicyResource {
         let client = self.source.client(ctx).await?;
         let user = find_user(client.as_ref(), &spec.project_id, &spec.user_description)
             .await
-            .map_err(ResourceError::provider)?
+            .map_err(crate::client::ovh_error)?
             .ok_or_else(|| {
                 ResourceError::provider(format!(
                     "OVH Public Cloud user with description {:?} not found",
@@ -130,7 +130,7 @@ impl S3UserPolicyResource {
                 },
             )
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(EnsureS3UserPolicyOutput { user_id, policy })
     }
 }

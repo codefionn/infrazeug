@@ -7,7 +7,7 @@
 use crate::client::OvhClientSource;
 use async_trait::async_trait;
 use infrazeug_ext_ovh_api::public_cloud::{Instance, InstanceCreate, InstanceListQuery};
-use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceError, ResourceResult};
+use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceResult};
 use serde::{Deserialize, Serialize};
 
 pub const ENSURE_INSTANCE: &str = "ovh.ensure_instance";
@@ -98,7 +98,7 @@ impl Resource for InstanceResource {
                 },
             )
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(instances
             .into_iter()
             .find(|i| i.name == spec.name && i.region == spec.region)
@@ -120,7 +120,7 @@ impl Resource for InstanceResource {
                 },
             )
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(to_output(created))
     }
 

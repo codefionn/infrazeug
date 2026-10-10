@@ -178,3 +178,14 @@ async fn build_from_vault_oauth2(
         client_secret,
     )))
 }
+
+/// Map an OVH API error onto [`ResourceError`], marking retryable failures
+/// (5xx, 429, timeouts, …) as [`ResourceError::Transient`] so `EnsureResource`
+/// retries them.
+pub(crate) fn ovh_error(err: infrazeug_ext_ovh_api::OvhError) -> ResourceError {
+    if err.is_transient() {
+        ResourceError::transient(err)
+    } else {
+        ResourceError::provider(err)
+    }
+}

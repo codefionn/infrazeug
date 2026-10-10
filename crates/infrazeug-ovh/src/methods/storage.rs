@@ -3,7 +3,7 @@
 use crate::client::OvhClientSource;
 use async_trait::async_trait;
 use infrazeug_ext_ovh_api::public_cloud::StorageContainerCreate;
-use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceError, ResourceResult};
+use infrazeug_resource::{EnsureResource, Resource, ResourceCtx, ResourceResult};
 use serde::{Deserialize, Serialize};
 
 pub const ENSURE_STORAGE_CONTAINER: &str = "ovh.ensure_storage_container";
@@ -64,7 +64,7 @@ impl Resource for StorageContainerResource {
         let existing = client
             .cloud_storage_containers(&spec.project_id, &spec.region)
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(existing
             .into_iter()
             .find(|c| c.name == spec.container_name)
@@ -88,7 +88,7 @@ impl Resource for StorageContainerResource {
                 },
             )
             .await
-            .map_err(ResourceError::provider)?;
+            .map_err(crate::client::ovh_error)?;
         Ok(EnsureStorageContainerOutput {
             container_id: created.name.clone(),
             name: created.name,
