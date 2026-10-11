@@ -88,7 +88,7 @@ pub struct ServiceAccountKey {
 }
 
 /// JWT signing metadata embedded in a service-account key.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceAccountKeyCredentials {
     pub aud: String,
@@ -101,17 +101,40 @@ pub struct ServiceAccountKeyCredentials {
     pub token_endpoint: Option<String>,
 }
 
+impl std::fmt::Debug for ServiceAccountKeyCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceAccountKeyCredentials")
+            .field("aud", &self.aud)
+            .field("iss", &self.iss)
+            .field("kid", &self.kid)
+            .field("sub", &self.sub)
+            .field("private_key", &self.private_key.as_ref().map(|_| "***"))
+            .field("token_endpoint", &self.token_endpoint)
+            .finish()
+    }
+}
+
 impl ServiceAccountKey {
     pub fn from_json(json: &str) -> Result<Self> {
         serde_json::from_str(json).map_err(StackitError::from)
     }
 
-    fn token_url(&self) -> String {
-        self.credentials
+    fn token_url(&self) -> Result<String> {
+        let url = self
+            .credentials
             .token_endpoint
             .clone()
             .filter(|url| !url.is_empty())
-            .unwrap_or_else(|| DEFAULT_TOKEN_URL.into())
+            .unwrap_or_else(|| DEFAULT_TOKEN_URL.into());
+        // The endpoint comes from the key document: require https so a
+        // tampered key JSON cannot redirect the signed (bearer-equivalent)
+        // JWT assertion to an attacker over cleartext.
+        if !url.starts_with("https://") {
+            return Err(StackitError::Auth(format!(
+                "token_endpoint must be https: {url}"
+            )));
+        }
+        Ok(url)
     }
 
     fn private_key_pem<'a>(&'a self, override_key: Option<&'a str>) -> Result<&'a str> {
@@ -142,10 +165,19 @@ struct TokenResponse {
     expires_in: Option<u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct CachedToken {
     access_token: String,
     expires_at: u64,
+}
+
+impl std::fmt::Debug for CachedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedToken")
+            .field("access_token", &"***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Exchanges signed JWTs for short-lived bearer tokens (key flow).
@@ -158,7 +190,13 @@ pub struct KeyFlowProvider {
 impl KeyFlowProvider {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Bounded timeouts: without them a stalled peer hangs the apply run
+            // forever (reqwest has no default request timeout).
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             cache: Arc::new(RwLock::new(None)),
         }
     }
@@ -206,7 +244,7 @@ impl KeyFlowProvider {
 
         let resp = self
             .http
-            .post(key.token_url())
+            .post(key.token_url()?)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(format!(
                 "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion={}",
@@ -248,6 +286,37 @@ mod tests {
     }
 
     #[test]
+    fn debug_redacts_private_key() {
+        let json = r#"{
+            "id": "key-id",
+            "credentials": {
+                "aud": "aud",
+                "iss": "sa@example.com",
+                "kid": "kid",
+                "sub": "sub-id",
+                "privateKey": "-----BEGIN RSA PRIVATE KEY-----\nSUPER-SECRET\n-----END RSA PRIVATE KEY-----",
+                "tokenEndpoint": "https://token.example/token"
+            }
+        }"#;
+        let key = ServiceAccountKey::from_json(json).unwrap();
+        let rendered = format!("{key:?}");
+        assert!(rendered.contains("key-id"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("SUPER-SECRET"));
+    }
+
+    #[test]
+    fn cached_token_debug_redacts_access_token() {
+        let cached = CachedToken {
+            access_token: "super-secret".into(),
+            expires_at: 42,
+        };
+        let rendered = format!("{cached:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("super-secret"));
+    }
+
+    #[test]
     fn parses_service_account_key() {
         let json = r#"{
             "id": "key-id",
@@ -260,6 +329,22 @@ mod tests {
             }
         }"#;
         let key = ServiceAccountKey::from_json(json).unwrap();
-        assert_eq!(key.token_url(), "https://token.example/token");
+        assert_eq!(key.token_url().unwrap(), "https://token.example/token");
+    }
+
+    #[test]
+    fn rejects_non_https_token_endpoint() {
+        let json = r#"{
+            "id": "key-id",
+            "credentials": {
+                "aud": "aud",
+                "iss": "sa@example.com",
+                "kid": "kid",
+                "sub": "sub-id",
+                "tokenEndpoint": "http://attacker.example/collect"
+            }
+        }"#;
+        let key = ServiceAccountKey::from_json(json).unwrap();
+        assert!(key.token_url().is_err());
     }
 }

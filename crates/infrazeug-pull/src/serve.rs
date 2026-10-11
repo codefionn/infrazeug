@@ -59,13 +59,23 @@ pub async fn apply_sealed_slice(
     machine_key_path: &std::path::Path,
     trusted_signers: &[[u8; 32]],
 ) -> Result<()> {
-    if store.is_revoked(machine).await? {
+    if store.is_revoked(machine, trusted_signers).await? {
         return Err(PullError::Revoked);
     }
     let sealed = store
         .get_sealed_plan(machine)
         .await?
         .ok_or_else(|| PullError::Sealed("no plan published".into()))?;
+    // Anyone can seal arbitrary plaintext to the machine's *public* key, so
+    // the decode path is attacker-reachable: bound the blob before unsealing
+    // and CBOR-decoding it (memory exhaustion otherwise).
+    const MAX_SEALED_PLAN_BYTES: usize = 8 * 1024 * 1024;
+    if sealed.len() > MAX_SEALED_PLAN_BYTES {
+        return Err(PullError::Sealed(format!(
+            "sealed plan is {} bytes (limit {MAX_SEALED_PLAN_BYTES})",
+            sealed.len()
+        )));
+    }
     let pair = MachineKeyPair::read_private_file(machine_key_path)
         .map_err(|e| PullError::Sealed(e.to_string()))?;
     let plain = unseal_bytes(&sealed, pair.secret_bytes())?;
@@ -141,4 +151,37 @@ pub fn verify_detached_agent_sig(
     vk.verify(&digest, &sig)
         .map_err(|_| PullError::Signature("agent signature mismatch".into()))?;
     Ok(())
+}
+
+/// Verify an agent artifact before executing it: the SHA-256 digest must match
+/// `agent_digest` (hex) and the detached signature must verify under
+/// `agent_signer` (hex Ed25519 public key). Both checks are mandatory — this is
+/// the bootstrap stub's only defense against executing a planted agent binary
+/// with full authority to apply plans (SOUL M6: detached signature
+/// verification of custom-agent distribution).
+pub fn verify_agent_artifact(
+    agent_bytes: &[u8],
+    agent_digest: &str,
+    sig_bytes: &[u8],
+    agent_signer: &str,
+) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let expected = agent_digest.trim().trim_start_matches("sha256:");
+    if expected.is_empty() {
+        return Err(PullError::Signature(
+            "bootstrap agent_digest is empty; refusing to run unverified agent".into(),
+        ));
+    }
+    let actual = hex::encode(Sha256::digest(agent_bytes));
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(PullError::Signature(format!(
+            "agent digest mismatch: expected {expected}, got {actual}"
+        )));
+    }
+    let signer = hex::decode(agent_signer.trim())
+        .map_err(|e| PullError::Signature(format!("invalid agent_signer hex: {e}")))?;
+    let signer: [u8; 32] = signer
+        .try_into()
+        .map_err(|_| PullError::Signature("agent_signer must be a 32-byte Ed25519 key".into()))?;
+    verify_detached_agent_sig(agent_bytes, sig_bytes, &signer)
 }

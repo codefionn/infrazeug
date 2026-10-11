@@ -117,7 +117,7 @@ impl std::fmt::Debug for OAuth2Credentials {
 }
 
 /// Response from the OVH OAuth2 token endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct TokenResponse {
     pub access_token: String,
     #[allow(dead_code)]
@@ -125,6 +125,17 @@ pub(crate) struct TokenResponse {
     pub expires_in: u64,
     #[allow(dead_code)]
     pub scope: Option<String>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"***")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 /// A cached Bearer token together with its absolute expiry instant.
@@ -259,6 +270,19 @@ mod tests {
         let rendered = format!("{creds:?}");
         assert!(rendered.contains("my-client-id"));
         assert!(!rendered.contains("top-secret"));
+    }
+
+    #[test]
+    fn token_response_debug_redacts_access_token() {
+        let resp = TokenResponse {
+            access_token: "super-secret-token".into(),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            scope: Some("all".into()),
+        };
+        let rendered = format!("{resp:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("super-secret-token"));
     }
 
     #[test]

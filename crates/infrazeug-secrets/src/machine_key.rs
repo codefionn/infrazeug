@@ -61,28 +61,46 @@ impl MachineKeyPair {
     }
 
     pub fn write_private_file(&self, path: &std::path::Path) -> Result<()> {
-        #[cfg(unix)]
-        let mut f = {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(path)
-                .map_err(|e| SecretsError::Io(e.to_string()))?
-        };
-        #[cfg(not(unix))]
-        let mut f = std::fs::File::create(path).map_err(|e| SecretsError::Io(e.to_string()))?;
-        f.write_all(self.secret.as_ref())
-            .map_err(|e| SecretsError::Io(e.to_string()))?;
+        // Write to a fresh `O_EXCL` temp file and rename it into place:
+        // `rename` replaces a pre-planted symlink instead of following it, so
+        // the machine secret key can never be redirected to another file.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            use rand::RngCore;
+            let dir = path
+                .parent()
+                .ok_or_else(|| SecretsError::Io("key path has no parent directory".into()))?;
+            let mut nonce = [0u8; 8];
+            rand::thread_rng().fill_bytes(&mut nonce);
+            let tmp = dir.join(format!(".key-{:x}.tmp", u64::from_le_bytes(nonce)));
+            let write = || -> std::io::Result<()> {
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&tmp)?;
+                f.write_all(self.secret.as_ref())?;
+                f.sync_all()?;
+                drop(f);
+                std::fs::rename(&tmp, path)?;
+                Ok(())
+            };
+            if let Err(e) = write() {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(SecretsError::Io(e.to_string()));
+            }
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
                 .map_err(|e| SecretsError::Io(e.to_string()))?;
+            Ok(())
         }
-        Ok(())
+        #[cfg(not(unix))]
+        {
+            let mut f = std::fs::File::create(path).map_err(|e| SecretsError::Io(e.to_string()))?;
+            f.write_all(self.secret.as_ref())
+                .map_err(|e| SecretsError::Io(e.to_string()))?;
+            Ok(())
+        }
     }
 
     pub fn read_private_file(path: &std::path::Path) -> Result<Self> {

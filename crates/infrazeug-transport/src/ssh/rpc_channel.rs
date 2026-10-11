@@ -1,7 +1,7 @@
 use crate::error::{Result, TransportError};
 use infrazeug_rpc::{
-    decode_one, encode, AgentEvent, AgentFrame, AgentMetrics, RpcNodeGraphEntry, RpcRequest,
-    RpcResponse,
+    decode_one, encode, AgentEvent, AgentFrame, AgentMetrics, FrameError, RpcNodeGraphEntry,
+    RpcRequest, RpcResponse,
 };
 use infrazeug_shell::local::{ExecOutput, OutputChunk};
 use infrazeug_shell::ShellOp;
@@ -117,9 +117,20 @@ impl RpcChannel {
         let _guard = self.request_lock.lock().await;
         self.send_request(&RpcRequest::ExecuteShell { op: op.clone() })
             .await?;
+        // A misbehaving agent could stream unlimited output chunks: bound the
+        // total relayed bytes (the terminal `ExecResult` is likewise bounded by
+        // the agent's own output cap).
+        let mut streamed = 0usize;
+        let cap = infrazeug_shell::local::MAX_OUTPUT_BYTES;
         loop {
             match self.recv_response().await? {
                 RpcResponse::ExecOutputChunk { stream, data } => {
+                    streamed += data.len();
+                    if streamed > cap {
+                        return Err(TransportError::Other(format!(
+                            "agent streamed more than {cap} bytes of output"
+                        )));
+                    }
                     if let Some(tx) = output.as_ref() {
                         let _ = tx.send(OutputChunk { stream, data });
                     }
@@ -256,9 +267,17 @@ async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
 ) -> Result<AgentFrame> {
     loop {
-        if let Ok((frame, consumed)) = decode_one::<AgentFrame>(buf) {
-            buf.drain(..consumed);
-            return Ok(frame);
+        match decode_one::<AgentFrame>(buf) {
+            Ok((frame, consumed)) => {
+                buf.drain(..consumed);
+                return Ok(frame);
+            }
+            // Incomplete frame: read more bytes.
+            Err(FrameError::Eof) => {}
+            // Corrupt or oversized frame: fatal, do not keep buffering.
+            Err(e) => {
+                return Err(TransportError::Other(format!("rpc frame decode: {e}")));
+            }
         }
         if buf.len() > 16 * 1024 * 1024 {
             return Err(TransportError::Other("rpc frame too large".into()));

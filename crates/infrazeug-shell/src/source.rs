@@ -22,6 +22,8 @@ pub enum FileSource {
     Capture(CaptureRef),
     /// Apply byte-level transforms to another source before consumption.
     Transform {
+        // Depth-guarded: nested `Transform` chains must stay bounded (see `depth`).
+        #[serde(deserialize_with = "crate::depth::de_file_source_boxed")]
         source: Box<FileSource>,
         transforms: Vec<FileSourceTransform>,
     },
@@ -377,6 +379,32 @@ pub fn capture_refs(op: &crate::op::ShellOp) -> Vec<CaptureRef> {
     let mut out = Vec::new();
     collect_capture_refs(op, &mut out);
     out
+}
+
+/// Collect capture references whose bytes are destined for the vault
+/// ([`ShellOp::VaultWrite`](crate::op::ShellOp::VaultWrite) values).
+///
+/// These captures are by design the vehicle for generated secret material
+/// (e.g. freshly minted API credentials) on its way to the vault and must never
+/// be surfaced to callers — in particular not through MCP tool results.
+pub fn secret_capture_refs(op: &crate::op::ShellOp) -> Vec<CaptureRef> {
+    let mut out = Vec::new();
+    collect_secret_capture_refs(op, &mut out);
+    out
+}
+
+fn collect_secret_capture_refs(op: &crate::op::ShellOp, out: &mut Vec<CaptureRef>) {
+    match op {
+        crate::op::ShellOp::VaultWrite { value, .. } => {
+            collect_capture_refs_source(value, out);
+        }
+        crate::op::ShellOp::Seq { steps } => {
+            for s in steps {
+                collect_secret_capture_refs(s, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_capture_refs(op: &crate::op::ShellOp, out: &mut Vec<CaptureRef>) {

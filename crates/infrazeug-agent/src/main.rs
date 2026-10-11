@@ -134,6 +134,15 @@ async fn serve_rpc() -> anyhow::Result<()> {
             break;
         }
         buf.extend_from_slice(&scratch[..n]);
+        // Bound the read buffer: a peer must not be able to make the agent
+        // buffer more than one max-size frame plus its varint header.
+        if buf.len() > infrazeug_rpc::frame::MAX_FRAME_BYTES + 16 {
+            writer
+                .write_response(RpcResponse::Error("rpc frame too large".into()))
+                .await?;
+            buf.clear();
+            continue;
+        }
 
         loop {
             match decode_one::<RpcRequest>(&buf) {

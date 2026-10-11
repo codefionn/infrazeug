@@ -7,6 +7,7 @@ use infrazeug_secrets::provider::{Provider, ProviderKind, RecipientEntry, WrapCt
 use infrazeug_secrets::{Result, SecretsError};
 use sha2::{Digest, Sha256};
 use std::env;
+use zeroize::Zeroizing;
 
 const KEK_INFO: &[u8] = b"infrazeug-kms-hkdf-v1";
 
@@ -18,14 +19,17 @@ pub struct KmsConfig {
 /// Environment-backed KMS stub for tests (`INFRZEUG_KMS_SEED` hex or UTF-8).
 pub struct EnvKmsProvider {
     config: KmsConfig,
-    seed: Vec<u8>,
+    /// Master secret equivalent: scrubbed on drop.
+    seed: Zeroizing<Vec<u8>>,
 }
 
 impl EnvKmsProvider {
     pub fn from_env(config: KmsConfig) -> Result<Self> {
         let raw = env::var("INFRZEUG_KMS_SEED")
             .map_err(|_| SecretsError::Provider("INFRZEUG_KMS_SEED not set".into()))?;
-        let seed = hex::decode(raw.trim()).unwrap_or_else(|_| raw.into_bytes());
+        let seed = Zeroizing::new(
+            hex::decode(raw.trim()).unwrap_or_else(|_| raw.trim().as_bytes().to_vec()),
+        );
         if seed.is_empty() {
             return Err(SecretsError::Provider("empty KMS seed".into()));
         }
@@ -33,7 +37,7 @@ impl EnvKmsProvider {
     }
 
     fn derive(&self, challenge: &[u8], data_key_id: &str) -> [u8; 32] {
-        let mut ikm = self.seed.clone();
+        let mut ikm = Zeroizing::new(self.seed.to_vec());
         ikm.extend_from_slice(self.config.key_id.as_bytes());
         ikm.extend_from_slice(challenge);
         let prk = Sha256::digest(&ikm);
@@ -54,7 +58,7 @@ impl Provider for EnvKmsProvider {
     async fn wrap(&self, dek: &[u8; 32], ctx: &WrapCtx, label: &str) -> Result<RecipientEntry> {
         let ch = challenge(&ctx.data_key_id, &ctx.file_salt);
         let kek = self.derive(&ch, &ctx.data_key_id);
-        let wrapped_key = seal(&kek, dek)?;
+        let wrapped_key = seal(&kek, dek, &ch)?;
         Ok(RecipientEntry {
             kind: ProviderKind::Kms,
             label: label.to_string(),
@@ -69,7 +73,7 @@ impl Provider for EnvKmsProvider {
     async fn unwrap(&self, entry: &RecipientEntry, ctx: &WrapCtx) -> Result<Vec<u8>> {
         let ch = challenge(&ctx.data_key_id, &ctx.file_salt);
         let kek = self.derive(&ch, &ctx.data_key_id);
-        open(&kek, &entry.wrapped_key)
+        open(&kek, &entry.wrapped_key, &ch)
     }
 }
 

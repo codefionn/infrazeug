@@ -437,6 +437,15 @@ pub async fn run(
                                 .long("http")
                                 .value_name("ADDR")
                                 .help("Streamable HTTP JSON-RPC server (e.g. 127.0.0.1:7777)"),
+                        )
+                        .arg(
+                            clap::Arg::new("http-token-file")
+                                .long("http-token-file")
+                                .value_name("PATH")
+                                .help(
+                                    "File with the bearer token required of HTTP clients \
+                                     (required for non-loopback binds; alt: INFRAZEUG_MCP_HTTP_TOKEN)",
+                                ),
                         ),
                 ),
         );
@@ -463,6 +472,9 @@ pub async fn run(
             let mode = McpServeMode::from_cli(
                 serve_matches.get_one::<String>("http").map(|s| s.as_str()),
                 serve_matches.get_flag("stdio"),
+                serve_matches
+                    .get_one::<String>("http-token-file")
+                    .map(|s| s.as_str()),
             )?;
             return dispatch_mcp_serve(factory()?, mode).await;
         }

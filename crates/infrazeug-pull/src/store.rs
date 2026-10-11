@@ -100,13 +100,23 @@ impl PlanStore {
         Ok(pk)
     }
 
-    pub async fn is_revoked(&self, machine: Uuid) -> Result<bool> {
-        Ok(self
+    /// Whether `machine` has an *authentic* revocation tombstone.
+    ///
+    /// The plan store is untrusted storage: tombstone presence alone is not
+    /// proof of revocation. Bodies are checked with
+    /// [`tombstone_is_authentic`](crate::publish::tombstone_is_authentic)
+    /// against the caller's trusted signer set, so a hostile store cannot forge
+    /// revocations (or `revoke-with-teardown` cleanup triggers).
+    pub async fn is_revoked(&self, machine: Uuid, trusted_signers: &[[u8; 32]]) -> Result<bool> {
+        let Some((bytes, _)) = self
             .backend
             .get(&Self::tombstone_key(machine))
             .await
             .map_err(|e| PullError::Store(e.to_string()))?
-            .is_some())
+        else {
+            return Ok(false);
+        };
+        crate::publish::tombstone_is_authentic(machine, &bytes, trusted_signers)
     }
 
     pub async fn put_tombstone(&self, machine: Uuid, body: &[u8]) -> Result<()> {
@@ -125,6 +135,18 @@ impl PlanStore {
         match self
             .backend
             .get(&Self::agent_sig_key(digest))
+            .await
+            .map_err(|e| PullError::Store(e.to_string()))?
+        {
+            Some((b, _)) => Ok(Some(b.to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_agent(&self, digest: &str, triple: &str) -> Result<Option<Vec<u8>>> {
+        match self
+            .backend
+            .get(&Self::agent_key(digest, triple))
             .await
             .map_err(|e| PullError::Store(e.to_string()))?
         {

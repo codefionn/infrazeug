@@ -122,8 +122,13 @@ impl WatchProxy {
         Ok(())
     }
 
-    pub async fn serve_http(self, bind: &str, cancel: CancellationToken) -> anyhow::Result<()> {
-        crate::http::serve_handler(move || Ok(self.clone()), bind, Some(cancel)).await
+    pub async fn serve_http(
+        self,
+        bind: &str,
+        token: Option<String>,
+        cancel: CancellationToken,
+    ) -> anyhow::Result<()> {
+        crate::http::serve_handler(move || Ok(self.clone()), bind, token, Some(cancel)).await
     }
 }
 

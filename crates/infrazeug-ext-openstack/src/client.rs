@@ -27,11 +27,24 @@ pub struct OpenstackClient {
     auth: Arc<RwLock<Option<AuthState>>>,
 }
 
+/// Default HTTP client with bounded timeouts (10 s connect, 30 s per request).
+///
+/// Without them any stall is an infinite hang that blocks the whole apply; the
+/// deadlines turn it into a clear, retryable error instead. Long uploads raise
+/// the per-request deadline themselves (see `storage::signed_request`).
+pub(crate) fn default_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
 impl OpenstackClient {
     /// Build an unauthenticated client (call [`authenticate`](Self::authenticate) next).
     pub fn new(config: OpenstackConfig) -> Self {
         Self {
-            http: Client::new(),
+            http: default_http_client(),
             config,
             auth: Arc::new(RwLock::new(None)),
         }

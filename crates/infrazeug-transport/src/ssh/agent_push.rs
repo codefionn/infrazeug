@@ -46,14 +46,24 @@ impl AgentPushBackend {
         }
 
         let dest = session.destination();
-        let remote_name = agent_remote_name(&agent_local).await?;
+        let (remote_name, local_digest) = agent_remote_name(&agent_local).await?;
         let home = session.remote_home().await?;
         let remote_bin = format!("{home}/{AGENT_REMOTE_DIR}/{remote_name}");
 
-        let (code, _, stderr) = session
-            .exec_remote(&[format!("test -x {}", shell_escape(&remote_bin))])
-            .await?;
-        if should_upload_agent(code, &stderr)? {
+        // The cache name embeds the local agent's digest, so verify the cached
+        // file's contents match it before reuse. Trusting `test -x` alone would
+        // run a pre-planted trojan with full authority over every `ShellOp` and
+        // env value (including vault-sourced secrets) sent to the agent.
+        let check = format!(
+            "test -x {bin} && sha256sum {bin}",
+            bin = shell_escape(&remote_bin)
+        );
+        let (code, stdout, _) = session.exec_remote(&[check]).await?;
+        // Reuse only on a verified digest match; any other outcome (cache miss,
+        // hash mismatch, missing sha256sum, transport hiccup) re-uploads, which
+        // is both safe and self-healing.
+        let cached_ok = cached_agent_matches(code, &stdout, &local_digest);
+        if !cached_ok {
             tracing::debug!(%dest, %remote_bin, "uploading infrazeug-agent");
             session
                 .upload_file(&remote_bin, &agent_local, 0o755)
@@ -245,7 +255,24 @@ impl AgentPushBackend {
     }
 }
 
-async fn agent_remote_name(agent_local: &Path) -> Result<String> {
+/// Decide from the remote `test -x … && sha256sum …` check whether the cached
+/// agent may be reused. Only an exact digest match allows reuse; every other
+/// outcome (missing file, hash mismatch, unexpected exit) means re-upload —
+/// never "reuse anyway".
+fn cached_agent_matches(code: i32, stdout: &[u8], expected_digest: &str) -> bool {
+    if code != 0 {
+        return false;
+    }
+    let got = String::from_utf8_lossy(stdout);
+    got.split_whitespace().next() == Some(expected_digest)
+}
+
+/// Remote cache file name and hex digest of the local agent binary.
+///
+/// The digest is part of the name (content-addressed) and is re-verified
+/// against the cached remote file before reuse, so a tampered cache is never
+/// executed.
+async fn agent_remote_name(agent_local: &Path) -> Result<(String, String)> {
     let mut file = tokio::fs::File::open(agent_local)
         .await
         .map_err(|e| TransportError::Other(e.to_string()))?;
@@ -261,18 +288,8 @@ async fn agent_remote_name(agent_local: &Path) -> Result<String> {
         }
         hash.update(&buf[..n]);
     }
-    Ok(format!("agent-{AGENT_VERSION}-{:x}", hash.finalize()))
-}
-
-fn should_upload_agent(code: i32, stderr: &[u8]) -> Result<bool> {
-    match code {
-        0 => Ok(false),
-        1 if stderr.is_empty() => Ok(true),
-        _ => Err(TransportError::Other(format!(
-            "remote agent cache check failed (exit {code}): {}",
-            String::from_utf8_lossy(stderr)
-        ))),
-    }
+    let digest = format!("{:x}", hash.finalize());
+    Ok((format!("agent-{AGENT_VERSION}-{digest}"), digest))
 }
 
 fn contains_sync_dir(op: &ShellOp) -> bool {
@@ -304,24 +321,34 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("infrazeug-agent-hash-{}", uuid::Uuid::new_v4()));
         tokio::fs::write(&path, b"abc").await.unwrap();
-        let first = agent_remote_name(&path).await.unwrap();
+        let (first_name, first_digest) = agent_remote_name(&path).await.unwrap();
         assert_eq!(
-            first,
-            format!(
-                "agent-{AGENT_VERSION}-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            )
+            first_name,
+            format!("agent-{AGENT_VERSION}-{first_digest}")
+        );
+        assert_eq!(
+            first_digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         tokio::fs::write(&path, b"abcd").await.unwrap();
         let second = agent_remote_name(&path).await.unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
-        assert_ne!(first, second);
+        assert_ne!(first_name, second.0);
     }
 
     #[test]
-    fn warm_cache_skips_upload_and_cache_miss_uploads() {
-        assert!(!should_upload_agent(0, b"").unwrap());
-        assert!(should_upload_agent(1, b"").unwrap());
-        assert!(should_upload_agent(255, b"connection lost").is_err());
-        assert!(should_upload_agent(1, b"remote shell failed").is_err());
+    fn cache_reuse_requires_matching_digest() {
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        // Matching digest: reuse.
+        let out = format!("{digest}  /home/u/.cache/infrazeug/agent-x\n");
+        assert!(cached_agent_matches(0, out.as_bytes(), digest));
+        // Cache miss: upload.
+        assert!(!cached_agent_matches(1, b"", digest));
+        // A tampered cache (wrong hash) must NOT be reused.
+        let evil = "0000000000000000000000000000000000000000000000000000000000000000  /home/u/.cache/infrazeug/agent-x\n";
+        assert!(!cached_agent_matches(0, evil.as_bytes(), digest));
+        // Unexpected outcomes (missing sha256sum, transport error) re-upload.
+        assert!(!cached_agent_matches(255, b"", digest));
+        assert!(!cached_agent_matches(127, b"", digest));
     }
 }

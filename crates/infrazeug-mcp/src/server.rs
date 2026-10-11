@@ -214,18 +214,21 @@ fn empty_schema() -> Arc<JsonObject> {
 }
 
 fn tool_run_json(run: &ToolRun) -> Value {
+    use infrazeug_core::secret_scan::redact_secrets;
     json!({
         "ok": run.all_ok(),
         "nodes": run.report.entries.iter().map(|e| json!({
             "node": e.node_name,
             "machine": e.machine_id.0.to_string(),
             "status": format!("{:?}", e.status),
-            "message": e.message,
+            "message": e.message.as_deref().map(redact_secrets),
         })).collect::<Vec<_>>(),
         "captures": run.captures.iter().map(|c| json!({
             "node": c.node,
             "machine": c.machine,
-            "stdout": c.stdout,
+            // Captures feeding vault writes are dropped upstream; the scrub
+            // here is defense in depth (SOUL: MCP tools never expose secrets).
+            "stdout": redact_secrets(&c.stdout),
         })).collect::<Vec<_>>(),
     })
 }

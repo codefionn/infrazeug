@@ -6,14 +6,17 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+argon2.workspace = true
 async-trait.workspace = true
 base64 = "0.22"
+hex.workspace = true
 hkdf.workspace = true
 infrazeug-secrets = { workspace = true }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+zeroize.workspace = true
 
 # Real PKCS#11 token support (off by default). Pure-Rust bindings that dlopen
 # the module at runtime, so this compiles in CI without a device attached.

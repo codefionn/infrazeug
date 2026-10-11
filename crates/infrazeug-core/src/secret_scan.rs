@@ -347,6 +347,12 @@ fn looks_random(value: &str) -> bool {
     if value.len() < MIN_LEN || !Charset::StdBase64.matches(value) {
         return false;
     }
+    // Subresource-integrity digests (`sha256-…`, `sha512-…`) are published
+    // hashes, not secrets.
+    if value.starts_with("sha256-") || value.starts_with("sha384-") || value.starts_with("sha512-")
+    {
+        return false;
+    }
     // SSH wire-format blobs (public keys, known_hosts entries) start with the
     // base64 of a length prefix; they are high-entropy but not secret.
     if value.starts_with("AAAA") {
@@ -683,6 +689,133 @@ fn classify_word(w: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Redact secret-shaped tokens in free text (defense-in-depth for output that
+/// leaves the process, e.g. MCP tool results).
+///
+/// - PEM **private** key blocks are replaced wholesale; public PEM blocks
+///   (certificates, public keys) pass through untouched.
+/// - Words matching a known token shape ([`classify_word`]) or the
+///   high-entropy heuristic ([`looks_random`]) become `"<redacted>"`.
+/// - `key=value` / `key: value` assignments under secret-like keys have just
+///   their value redacted ([`secret_like_key`]).
+/// - Embedded basic-auth URL passwords are redacted.
+///
+/// This is a best-effort backstop — the primary control is keeping secrets out
+/// of captured output in the first place (captures feeding `VaultWrite` are
+/// dropped entirely, see [`crate::capture::capture_is_secret`]).
+pub fn redact_secrets(text: &str) -> String {
+    const REDACTED: &str = "<redacted>";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // PEM blocks: private -> "<redacted>", public -> verbatim (protected from
+    // the word-level pass, whose entropy heuristic would chew up base64 bodies).
+    const BEGIN: &str = "-----BEGIN ";
+    while let Some(start) = rest.find(BEGIN) {
+        let after_begin = &rest[start + BEGIN.len()..];
+        let Some(label_end) = after_begin.find("-----") else {
+            break;
+        };
+        let label = &after_begin[..label_end];
+        let end_marker = format!("-----END {label}-----");
+        let Some(end) = rest[start..].find(&end_marker) else {
+            break;
+        };
+        let block_end = start + end + end_marker.len();
+        out.push_str(&scrub_text(&rest[..start]));
+        if label.contains("PRIVATE KEY") {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(&rest[start..block_end]);
+        }
+        rest = &rest[block_end..];
+    }
+    out.push_str(&scrub_text(rest));
+    out
+}
+
+/// Scrub secret-shaped tokens in a PEM-block-free text span.
+fn scrub_text(text: &str) -> String {
+    const REDACTED: &str = "<redacted>";
+    // Line-level `key = value` / `key: value` assignments (config/JSON lines).
+    let mut scrubbed = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (content, ending) = match line.strip_suffix('\n') {
+            Some(content) => (content, "\n"),
+            None => (line, ""),
+        };
+        let redacted_line = match split_assignment(content) {
+            Some((key, value))
+                if !value.is_empty() && secret_like_key(key) && plausible_secret_value(value) =>
+            {
+                content.replacen(value, REDACTED, 1)
+            }
+            _ => content.to_string(),
+        };
+        scrubbed.push_str(&redacted_line);
+        scrubbed.push_str(ending);
+    }
+    // Word-level: known token shapes and high-entropy words. URLs are exempt
+    // from the entropy heuristic (long URLs read as high-entropy) — they are
+    // handled by the basic-auth pass below. `key=value` words are checked per
+    // part so `token=ghp_…` is caught.
+    let mut rebuilt = String::with_capacity(scrubbed.len());
+    for word in scrubbed.split_inclusive(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+    {
+        let trimmed =
+            word.trim_matches(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',');
+        if trimmed.is_empty() || trimmed.contains("://") {
+            rebuilt.push_str(word);
+            continue;
+        }
+        let mut out_word = word.to_string();
+        let mut hit = false;
+        for part in trimmed.split(['=', ':']) {
+            if part.is_empty() {
+                continue;
+            }
+            if classify_word(part).is_some() || looks_random(part) {
+                out_word = out_word.replacen(part, REDACTED, 1);
+                hit = true;
+            }
+        }
+        if hit {
+            rebuilt.push_str(&out_word);
+        } else {
+            rebuilt.push_str(word);
+        }
+    }
+    redact_url_passwords(&rebuilt)
+}
+
+/// Replace the password part of embedded basic-auth URLs.
+fn redact_url_passwords(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        let (head, tail) = rest.split_at(scheme_end + 3);
+        out.push_str(head);
+        let authority_end = tail
+            .find(|c: char| c.is_whitespace() || c == '/' || c == '"' || c == '\'')
+            .unwrap_or(tail.len());
+        let (authority, tail) = tail.split_at(authority_end);
+        if let Some((userinfo, host)) = authority.rsplit_once('@') {
+            if let Some((user, pass)) = userinfo.split_once(':') {
+                if !pass.is_empty() && !pass.starts_with('$') && !pass.contains("{{") {
+                    out.push_str(user);
+                    out.push_str(":<redacted>@");
+                    out.push_str(host);
+                    rest = tail;
+                    continue;
+                }
+            }
+        }
+        out.push_str(authority);
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -1140,5 +1273,68 @@ mod tests {
             let infra = infra_with_global_var(key, scalar("some-plain-value"));
             assert!(report_for(&infra).has_errors(), "key {key:?} not flagged");
         }
+    }
+
+    #[test]
+    fn redact_secrets_scrubs_known_token_shapes() {
+        let text = "token ghp_1234567890abcdefghij123456 done";
+        let out = redact_secrets(text);
+        assert!(!out.contains("ghp_"), "{out}");
+        assert!(out.contains("<redacted>"), "{out}");
+        assert!(out.contains("token") && out.contains("done"), "{out}");
+    }
+
+    #[test]
+    fn redact_secrets_scrubs_aws_key_ids_and_jwt() {
+        let out = redact_secrets("id=AKIAIOSFODNN7EXAMPLE ok");
+        assert!(!out.contains("AKIA"), "{out}");
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnopqrstuvwxyz012345";
+        let out = redact_secrets(jwt);
+        assert!(!out.contains("eyJhbGci"), "{out}");
+    }
+
+    #[test]
+    fn redact_secrets_redacts_secret_keyed_values_only() {
+        let out = redact_secrets("db_password: hunter2\napi_url: https://example.com");
+        assert!(out.contains("db_password: <redacted>"), "{out}");
+        assert!(out.contains("api_url: https://example.com"), "{out}");
+    }
+
+    #[test]
+    fn redact_secrets_handles_url_basic_auth() {
+        let out = redact_secrets("curl https://user:pass123@example.com/x");
+        assert!(!out.contains("pass123"), "{out}");
+        assert!(out.contains("user:<redacted>@example.com"), "{out}");
+    }
+
+    #[test]
+    fn redact_secrets_private_pem_redacted_public_pem_kept() {
+        let privk = "-----BEGIN PRIVATE KEY-----\nabcd\n-----END PRIVATE KEY-----";
+        let out = redact_secrets(privk);
+        assert!(!out.contains("abcd"), "{out}");
+        let pubk = "-----BEGIN CERTIFICATE-----\nabcd\n-----END CERTIFICATE-----";
+        let out = redact_secrets(pubk);
+        assert!(out.contains("abcd"), "{out}");
+    }
+
+    #[test]
+    fn redact_secrets_keeps_plain_text_and_newlines() {
+        let text = "test-host\nsecond line\n";
+        assert_eq!(redact_secrets(text), text);
+    }
+
+    #[test]
+    fn redact_secrets_redacts_high_entropy_words() {
+        let tok: String = {
+            // Deterministic high-entropy base64ish token with letters+digits.
+            let mut s = String::new();
+            let alphabet: Vec<char> = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+            for i in 0..48 {
+                s.push(alphabet[(i * 37 + 11) % alphabet.len()]);
+            }
+            s
+        };
+        let out = redact_secrets(&format!("key: {tok}"));
+        assert!(!out.contains(&tok), "{out}");
     }
 }

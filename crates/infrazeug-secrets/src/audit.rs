@@ -12,13 +12,25 @@ pub struct AuditEntry {
 }
 
 pub fn append_audit(run_audit_dir: &Path, entry: &AuditEntry) -> std::io::Result<()> {
-    std::fs::create_dir_all(run_audit_dir)?;
+    // Audit logs record who touched which secret file: owner-only.
+    let mut dir = std::fs::DirBuilder::new();
+    dir.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dir.mode(0o700);
+    }
+    dir.create(run_audit_dir)?;
     let date = chrono_lite_date();
     let path = run_audit_dir.join(format!("{date}.log"));
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
     writeln!(
         f,
         "{} who={} op={} file={} key={} host={} ok={}",

@@ -40,17 +40,39 @@ pub fn emit_secret() -> Result<()> {
 }
 
 /// Write a secret to `path` with `0600` permissions and no trailing newline.
+///
+/// The bytes go to a fresh `O_EXCL` temp file in the same directory, which is
+/// then `rename`d over `path`. `rename` replaces a pre-planted symlink instead
+/// of following it, so the secret can never be redirected to an
+/// attacker-chosen file, and a leftover file with lax permissions is never
+/// silently reused.
 pub fn write_secret_file(path: &Path, secret: &[u8]) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(CoreError::from)?;
-    f.write_all(secret).map_err(CoreError::from)?;
-    f.flush().map_err(CoreError::from)?;
+    let dir = path.parent().ok_or_else(|| {
+        CoreError::other(format!("secret path {} has no parent directory", path.display()))
+    })?;
+    let tmp = dir.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("secret"),
+        uuid::Uuid::new_v4()
+    ));
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(secret)?;
+        f.flush()?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(CoreError::from(e));
+    }
     Ok(())
 }
 
@@ -73,6 +95,26 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn write_secret_file_replaces_symlink_instead_of_following_it() {
+        let dir = std::env::temp_dir().join(format!("iz-askpass-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"original").unwrap();
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+        write_secret_file(&path, b"hunter2").unwrap();
+
+        // The symlink was replaced, not followed: the victim is untouched and
+        // the secret landed in the requested path with tight permissions.
+        assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+        assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_file());
+        assert_eq!(std::fs::read(&path).unwrap(), b"hunter2");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

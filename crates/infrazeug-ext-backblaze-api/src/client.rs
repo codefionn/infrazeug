@@ -49,12 +49,23 @@ impl BackblazeConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct AuthSession {
     account_id: String,
     api_url: String,
     auth_token: String,
     download_url: Option<String>,
+}
+
+impl std::fmt::Debug for AuthSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthSession")
+            .field("account_id", &self.account_id)
+            .field("api_url", &self.api_url)
+            .field("auth_token", &"***")
+            .field("download_url", &self.download_url)
+            .finish()
+    }
 }
 
 /// An authenticated Backblaze B2 Native API client.
@@ -72,7 +83,13 @@ impl BackblazeClient {
     /// Build a client with the given configuration.
     pub fn new(config: BackblazeConfig) -> Self {
         Self {
-            http: Client::new(),
+            // Bounded timeouts: without them a stalled peer hangs the apply run
+            // forever (reqwest has no default request timeout).
+            http: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             config,
             session: Arc::new(RwLock::new(None)),
         }
@@ -197,7 +214,7 @@ impl BackblazeClient {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct AuthorizeResponse {
     #[serde(rename = "accountId")]
     account_id: String,
@@ -205,6 +222,16 @@ struct AuthorizeResponse {
     authorization_token: String,
     #[serde(rename = "apiInfo")]
     api_info: ApiInfo,
+}
+
+impl std::fmt::Debug for AuthorizeResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizeResponse")
+            .field("account_id", &self.account_id)
+            .field("authorization_token", &"***")
+            .field("api_info", &self.api_info)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,5 +317,34 @@ mod tests {
             message: "bad".into(),
         };
         assert!(err.is_auth_token_error());
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let session = AuthSession {
+            account_id: "acct-1".into(),
+            api_url: "https://api001.backblazeb2.com".into(),
+            auth_token: "auth-token-secret".into(),
+            download_url: None,
+        };
+        let rendered = format!("{session:?}");
+        assert!(rendered.contains("acct-1"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("auth-token-secret"));
+
+        let response = AuthorizeResponse {
+            account_id: "acct-1".into(),
+            authorization_token: "auth-token-secret".into(),
+            api_info: ApiInfo {
+                storage_api: StorageApiInfo {
+                    api_url: None,
+                    download_url: None,
+                },
+            },
+        };
+        let rendered = format!("{response:?}");
+        assert!(rendered.contains("acct-1"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("auth-token-secret"));
     }
 }

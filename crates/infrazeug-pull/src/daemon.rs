@@ -31,7 +31,7 @@ pub async fn run_daemon(
 ) -> Result<()> {
     let mut last_digest: Option<[u8; 32]> = None;
     loop {
-        if store.is_revoked(machine).await? {
+        if store.is_revoked(machine, trusted_signers).await? {
             return Err(PullError::Revoked);
         }
         if let Some(sealed) = store.get_sealed_plan(machine).await? {

@@ -5,12 +5,24 @@ use tokio::sync::RwLock;
 const TOKEN_URL_TEMPLATE: &str = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token";
 const MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 
-#[derive(Debug, Clone)]
+/// Azure service credentials (tenant/subscription + OAuth2 client credentials).
+#[derive(Clone)]
 pub struct AzureCredentials {
     pub tenant_id: String,
     pub client_id: String,
     pub client_secret: String,
     pub subscription_id: String,
+}
+
+impl std::fmt::Debug for AzureCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureCredentials")
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"***")
+            .field("subscription_id", &self.subscription_id)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -37,7 +49,13 @@ impl AzureAuth {
     pub fn new(creds: AzureCredentials) -> Self {
         Self {
             creds,
-            http: reqwest::Client::new(),
+            // Bounded timeouts: without them a stalled peer hangs the apply run
+            // forever (reqwest has no default request timeout).
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             cache: std::sync::Arc::new(RwLock::new(None)),
         }
     }
@@ -91,5 +109,25 @@ impl AzureAuth {
         };
         *self.cache.write().await = Some(token.clone());
         Ok(token.access_token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let creds = AzureCredentials {
+            tenant_id: "tenant-1".into(),
+            client_id: "client-1".into(),
+            client_secret: "super-secret".into(),
+            subscription_id: "sub-1".into(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(rendered.contains("tenant-1"));
+        assert!(rendered.contains("client-1"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("super-secret"));
     }
 }

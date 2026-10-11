@@ -160,6 +160,10 @@ pub enum McpCmd {
         /// Streamable HTTP JSON-RPC server (e.g. `127.0.0.1:7777`).
         #[arg(long = "http", value_name = "ADDR")]
         http: Option<String>,
+        /// File holding the bearer token required of HTTP clients (non-loopback
+        /// binds require a token; alternative: INFRAZEUG_MCP_HTTP_TOKEN env var).
+        #[arg(long = "http-token-file", value_name = "PATH")]
+        http_token_file: Option<String>,
     },
 }
 
@@ -438,9 +442,14 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<()> {
             dispatch(&bundle, &pb).await?;
         }
         Commands::Mcp {
-            cmd: McpCmd::Serve { http, stdio },
+            cmd:
+                McpCmd::Serve {
+                    http,
+                    stdio,
+                    http_token_file,
+                },
         } => {
-            McpServeMode::from_cli(http.as_deref(), stdio)?;
+            McpServeMode::from_cli(http.as_deref(), stdio, http_token_file.as_deref())?;
             let project = discover_playbook(std::env::current_dir()?)?.context(
                 "no infrazeug playbook in this directory (expected Cargo.toml with infrazeug-api dependency)",
             )?;

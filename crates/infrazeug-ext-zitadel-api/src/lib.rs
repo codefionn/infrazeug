@@ -27,6 +27,18 @@ pub struct ZitadelClient {
     http: reqwest::Client,
 }
 
+/// Default HTTP client with bounded timeouts (10 s connect, 30 s per request).
+///
+/// Without them any stall is an infinite hang that blocks the whole apply; the
+/// deadlines turn it into a clear, retryable error instead.
+fn default_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 impl ZitadelClient {
     /// `token` is a personal access token or another bearer access token with
     /// management permissions. No token is refreshed by this client.
@@ -39,7 +51,7 @@ impl ZitadelClient {
         Ok(Self {
             base_url,
             token: token.into(),
-            http: reqwest::Client::new(),
+            http: default_http_client(),
         })
     }
 

@@ -44,11 +44,25 @@ pub struct NetBirdClient {
     config: NetBirdConfig,
 }
 
+/// Default HTTP client with bounded timeouts (10 s connect, 30 s per request).
+///
+/// Without them any stall is an infinite hang that blocks the whole apply; the
+/// deadlines turn it into a clear, retryable error instead. Callers needing
+/// different timeouts, a proxy, or custom TLS can supply their own client via
+/// [`NetBirdClient::with_http_client`].
+fn default_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
 impl NetBirdClient {
     /// Build a client with the supplied configuration.
     pub fn new(config: NetBirdConfig) -> Self {
         Self {
-            http: Client::new(),
+            http: default_http_client(),
             config,
         }
     }

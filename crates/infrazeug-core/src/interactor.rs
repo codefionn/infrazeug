@@ -45,13 +45,26 @@ pub enum Interaction {
 
 pub use infrazeug_secrets::ProviderKind;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum InteractionResp {
     Passphrase(String),
     Approve,
     Deny,
     Cancel,
     Pick(usize),
+}
+
+impl std::fmt::Debug for InteractionResp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `Passphrase` carries live secret material: never print it.
+        match self {
+            InteractionResp::Passphrase(_) => write!(f, "Passphrase(<redacted>)"),
+            InteractionResp::Approve => write!(f, "Approve"),
+            InteractionResp::Deny => write!(f, "Deny"),
+            InteractionResp::Cancel => write!(f, "Cancel"),
+            InteractionResp::Pick(i) => write!(f, "Pick({i:?})"),
+        }
+    }
 }
 
 #[async_trait]

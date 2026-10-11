@@ -1,5 +1,6 @@
 //! S3 bucket create/exists via AWS Signature V4 (OVH High Performance Object Storage).
 
+use crate::client::default_http_client;
 use crate::error::{OpenstackError, Result};
 use infrazeug_secrets_s3::sigv4::{
     self, authorization_header, encode_path, encode_query, Credentials, SignRequest,
@@ -91,6 +92,9 @@ async fn signed_request(
     req = req.header("Authorization", auth);
     if let Some(b) = body {
         req = req.body(b.to_vec());
+        // Payload-carrying requests (uploads) can legitimately run long; raise
+        // the client's 30 s total deadline per request instead of removing it.
+        req = req.timeout(std::time::Duration::from_secs(600));
     }
     Ok(req.send().await?)
 }
@@ -102,7 +106,7 @@ pub async fn bucket_exists(
     creds: &Credentials,
     bucket: &str,
 ) -> Result<bool> {
-    let http = Client::new();
+    let http = default_http_client();
     let resp = signed_request(&http, Method::HEAD, endpoint, region, creds, bucket, None).await?;
     match resp.status() {
         StatusCode::OK => Ok(true),
@@ -124,7 +128,7 @@ pub async fn create_bucket(
     creds: &Credentials,
     bucket: &str,
 ) -> Result<()> {
-    let http = Client::new();
+    let http = default_http_client();
     let resp = signed_request(&http, Method::PUT, endpoint, region, creds, bucket, None).await?;
     let status = resp.status();
     if status.is_success() || status == StatusCode::CONFLICT {

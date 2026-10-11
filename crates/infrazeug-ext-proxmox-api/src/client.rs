@@ -50,6 +50,17 @@ pub struct ProxmoxClient {
     config: ProxmoxConfig,
 }
 
+/// Base [`reqwest::ClientBuilder`] with bounded timeouts (10 s connect,
+/// 30 s per request). Without them any stall is an infinite hang that blocks
+/// the whole apply; the deadlines turn it into a clear, retryable error
+/// instead. Callers needing different timeouts, a proxy, or custom TLS can
+/// supply their own client via [`ProxmoxClient::with_http_client`].
+fn timeout_builder() -> reqwest::ClientBuilder {
+    Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+}
+
 impl ProxmoxClient {
     /// Build a client with the given configuration.
     ///
@@ -57,14 +68,14 @@ impl ProxmoxClient {
     /// default secure client; use [`ProxmoxClient::try_new`] to surface that error.
     pub fn new(config: ProxmoxConfig) -> Self {
         Self::try_new(config.clone()).unwrap_or(Self {
-            http: Client::new(),
+            http: timeout_builder().build().unwrap_or_else(|_| Client::new()),
             config,
         })
     }
 
     /// Build a client, surfacing a TLS setup failure instead of falling back.
     pub fn try_new(config: ProxmoxConfig) -> Result<Self> {
-        let builder = Client::builder().danger_accept_invalid_certs(config.insecure_tls);
+        let builder = timeout_builder().danger_accept_invalid_certs(config.insecure_tls);
         match builder.build() {
             Ok(http) => Ok(Self { http, config }),
             Err(e) => Err(ProxmoxError::Build(e.to_string())),

@@ -12,6 +12,11 @@ pub enum FrameError {
     Eof,
 }
 
+/// Maximum accepted frame payload (16 MiB). Enforced at decode time so every
+/// reader of untrusted frames is bounded; a peer cannot make us buffer or
+/// allocate more than this per frame.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
 /// Encode `uvarint(len) || postcard(payload)`.
 ///
 /// Wire format used by the RPC microarchitecture: the controller writes
@@ -30,6 +35,9 @@ pub fn encode<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>, FrameError> {
 pub fn decode_one<T: serde::de::DeserializeOwned>(buf: &[u8]) -> Result<(T, usize), FrameError> {
     let (len, hdr) = decode_uvarint(buf).ok_or(FrameError::Eof)?;
     let len = len as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(FrameError::TooLarge);
+    }
     let start = hdr;
     let end = start.checked_add(len).ok_or(FrameError::TooLarge)?;
     if end > buf.len() {
@@ -268,5 +276,74 @@ mod tests {
             broken.is_empty(),
             "broken postcard round-trips: {broken:#?}"
         );
+    }
+
+    /// A frame whose length prefix claims more than `MAX_FRAME_BYTES` must be
+    /// rejected as soon as the header is parsed — never buffered for.
+    #[test]
+    fn oversized_frame_is_rejected() {
+        let mut buf = encode_uvarint((MAX_FRAME_BYTES as u64) + 1);
+        buf.extend_from_slice(&[0u8; 8]);
+        let err = decode_one::<Ping>(&buf).unwrap_err();
+        assert!(matches!(err, FrameError::TooLarge));
+    }
+
+    /// Crafted frames with deep `ShellOp::Seq` nesting must be rejected without
+    /// overflowing the stack (postcard has no recursion limit of its own; the
+    /// derived deserializer would recurse ~depth times and abort the process).
+    #[test]
+    fn deeply_nested_shellop_seq_is_rejected() {
+        use crate::messages::RpcRequest;
+        // Raw postcard bytes for
+        // `RpcRequest::ExecuteShell { op: Seq { steps: [Seq { steps: [...] }] } }`
+        // built inside-out: variant 1 (ExecuteShell), then per level variant 1
+        // (Seq) + a 1-element `steps` vec, terminating in `Seq` with no steps.
+        let depth = 100_000usize;
+        let mut body = vec![1u8, 1u8]; // ExecuteShell, first Seq
+        for _ in 0..depth {
+            body.push(1); // steps: one element -> nested Seq
+        }
+        body.push(1); // innermost Seq
+        body.push(0); // steps: empty
+        let mut framed = encode_uvarint(body.len() as u64);
+        framed.extend_from_slice(&body);
+        assert!(decode_one::<RpcRequest>(&framed).is_err());
+    }
+
+    /// Same for deeply nested `FileSource::Transform` chains inside `WriteFile`.
+    #[test]
+    fn deeply_nested_filesource_transform_is_rejected() {
+        use crate::messages::RpcRequest;
+        // `ExecuteShell { op: WriteFile { path: "", content: Transform { source:
+        // Transform { ... Bytes([]) ... }, transforms: [] }, mode: 0 } }`
+        let depth = 100_000usize;
+        let mut body = vec![1u8, 3u8, 0u8]; // ExecuteShell, WriteFile, empty path
+        for _ in 0..depth {
+            body.push(4); // FileSource::Transform
+        }
+        body.extend_from_slice(&[0, 0]); // innermost FileSource::Bytes([])
+        for _ in 0..depth {
+            body.push(0); // transforms: empty vec
+        }
+        body.push(0); // mode: 0
+        let mut framed = encode_uvarint(body.len() as u64);
+        framed.extend_from_slice(&body);
+        assert!(decode_one::<RpcRequest>(&framed).is_err());
+    }
+
+    /// Legitimate shallow nesting must still decode (guards do not break the
+    /// wire format).
+    #[test]
+    fn shallow_nested_shellop_seq_roundtrips() {
+        use crate::messages::RpcRequest;
+        use infrazeug_shell::ShellOp;
+        let mut op = ShellOp::run(vec!["true".into()]);
+        for _ in 0..16 {
+            op = ShellOp::Seq { steps: vec![op] };
+        }
+        let req = RpcRequest::ExecuteShell { op };
+        let bytes = encode(&req).unwrap();
+        let (decoded, _) = decode_one::<RpcRequest>(&bytes).unwrap();
+        assert_eq!(decoded, req);
     }
 }

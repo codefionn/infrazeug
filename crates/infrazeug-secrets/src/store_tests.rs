@@ -339,6 +339,7 @@ mod tests {
             file_salt: [2u8; 32],
             recipients: vec![],
             auth: Vec::new(),
+            auth_version: 0,
         };
         let entry = provider
             .wrap(

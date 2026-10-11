@@ -77,12 +77,22 @@ pub enum CredentialState {
 }
 
 /// Response from `POST /auth/credential`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialRequestResult {
     pub consumer_key: String,
     pub state: CredentialState,
     pub validation_url: String,
+}
+
+impl std::fmt::Debug for CredentialRequestResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialRequestResult")
+            .field("consumer_key", &"***")
+            .field("state", &self.state)
+            .field("validation_url", &self.validation_url)
+            .finish()
+    }
 }
 
 impl OvhClient {
@@ -114,5 +124,18 @@ mod tests {
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""method":"GET""#));
         assert!(json.contains(r#""path":"/me""#));
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let result = CredentialRequestResult {
+            consumer_key: "super-secret-ck".into(),
+            state: CredentialState::PendingValidation,
+            validation_url: "https://eu.api.ovh.com/auth/credential/validation".into(),
+        };
+        let rendered = format!("{result:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("super-secret-ck"));
+        assert!(rendered.contains("PendingValidation"));
     }
 }

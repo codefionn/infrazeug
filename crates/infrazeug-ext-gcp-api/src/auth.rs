@@ -10,13 +10,24 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Parsed service-account key material.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ServiceAccountKey {
     pub project_id: String,
     pub client_email: String,
     private_key: String,
     #[serde(default)]
     token_uri: Option<String>,
+}
+
+impl std::fmt::Debug for ServiceAccountKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceAccountKey")
+            .field("project_id", &self.project_id)
+            .field("client_email", &self.client_email)
+            .field("private_key", &"***")
+            .field("token_uri", &self.token_uri)
+            .finish()
+    }
 }
 
 impl ServiceAccountKey {
@@ -59,7 +70,13 @@ impl GcpAuth {
     pub fn new(key: ServiceAccountKey) -> Self {
         Self {
             key,
-            http: reqwest::Client::new(),
+            // Bounded timeouts: without them a stalled peer hangs the apply run
+            // forever (reqwest has no default request timeout).
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             cache: std::sync::Arc::new(RwLock::new(None)),
         }
     }
@@ -89,6 +106,12 @@ impl GcpAuth {
             .token_uri
             .clone()
             .unwrap_or_else(|| TOKEN_URL.into());
+        // The endpoint comes from the key document: require https so a
+        // tampered key JSON cannot redirect the signed (bearer-equivalent)
+        // JWT assertion to an attacker over cleartext.
+        if !aud.starts_with("https://") {
+            return Err(GcpError::Auth(format!("token_uri must be https: {aud}")));
+        }
         let claims = Claims {
             iss: &self.key.client_email,
             scope: DEFAULT_SCOPE,
@@ -124,5 +147,27 @@ impl GcpAuth {
             access_token: parsed.access_token,
             expires_at: now + parsed.expires_in.unwrap_or(3600),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let key = ServiceAccountKey::from_json(
+            r#"{
+                "project_id": "my-project",
+                "client_email": "sa@my-project.iam.gserviceaccount.com",
+                "private_key": "-----BEGIN RSA PRIVATE KEY-----\nSUPER-SECRET\n-----END RSA PRIVATE KEY-----",
+                "token_uri": "https://oauth2.googleapis.com/token"
+            }"#,
+        )
+        .unwrap();
+        let rendered = format!("{key:?}");
+        assert!(rendered.contains("my-project"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("SUPER-SECRET"));
     }
 }

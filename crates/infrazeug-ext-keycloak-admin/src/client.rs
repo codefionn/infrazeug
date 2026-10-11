@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// OAuth2 grant type used to obtain an admin access token.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum GrantType {
     /// `grant_type=client_credentials` — machine-to-machine.
     ClientCredentials {
@@ -29,8 +29,35 @@ pub enum GrantType {
     },
 }
 
+impl std::fmt::Debug for GrantType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClientCredentials {
+                client_id,
+                client_secret: _,
+            } => f
+                .debug_struct("ClientCredentials")
+                .field("client_id", &client_id)
+                .field("client_secret", &"***")
+                .finish(),
+            Self::Password {
+                client_id,
+                client_secret,
+                username,
+                password: _,
+            } => f
+                .debug_struct("Password")
+                .field("client_id", &client_id)
+                .field("client_secret", &client_secret.as_ref().map(|_| "***"))
+                .field("username", &username)
+                .field("password", &"***")
+                .finish(),
+        }
+    }
+}
+
 /// Connection configuration for a Keycloak Admin client.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeycloakConfig {
     /// Keycloak base URL (e.g. `https://keycloak.example.local`). No trailing slash.
     pub base_url: String,
@@ -38,6 +65,16 @@ pub struct KeycloakConfig {
     pub realm: String,
     /// Grant type used to obtain access tokens.
     pub grant_type: GrantType,
+}
+
+impl std::fmt::Debug for KeycloakConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeycloakConfig")
+            .field("base_url", &self.base_url)
+            .field("realm", &self.realm)
+            .field("grant_type", &self.grant_type)
+            .finish()
+    }
 }
 
 impl KeycloakConfig {
@@ -55,10 +92,18 @@ impl KeycloakConfig {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct TokenState {
     access_token: String,
     expires_at: tokio::time::Instant,
+}
+
+impl std::fmt::Debug for TokenState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenState")
+            .field("access_token", &"***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// An authenticated Keycloak Admin REST API client.
@@ -495,5 +540,46 @@ mod tests {
     fn append_query_encodes() {
         let url = append_query("http://x/y", &[("search", "a b"), ("brief", "true")]);
         assert_eq!(url, "http://x/y?search=a%20b&brief=true");
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let config = KeycloakConfig::new(
+            "http://kc.local",
+            "master",
+            GrantType::Password {
+                client_id: "admin-cli".into(),
+                client_secret: Some("client-super-secret".into()),
+                username: "admin".into(),
+                password: "password-super-secret".into(),
+            },
+        );
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("admin-cli"));
+        assert!(rendered.contains("admin"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("client-super-secret"));
+        assert!(!rendered.contains("password-super-secret"));
+
+        let config = KeycloakConfig::new(
+            "http://kc.local",
+            "master",
+            GrantType::ClientCredentials {
+                client_id: "admin-cli".into(),
+                client_secret: "client-super-secret".into(),
+            },
+        );
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("admin-cli"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("client-super-secret"));
+
+        let state = TokenState {
+            access_token: "token-super-secret".into(),
+            expires_at: tokio::time::Instant::now(),
+        };
+        let rendered = format!("{state:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("token-super-secret"));
     }
 }

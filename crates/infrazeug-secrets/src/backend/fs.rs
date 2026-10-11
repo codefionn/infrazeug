@@ -29,15 +29,29 @@ impl FsBackend {
     }
 
     async fn create_private_dir_all(path: &std::path::Path) -> Result<()> {
-        tokio::fs::create_dir_all(path)
-            .await
-            .map_err(|e| SecretsError::Backend(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-                .await
-                .map_err(|e| SecretsError::Backend(e.to_string()))?;
+        // Create each missing component with 0700 so intermediate directories
+        // (e.g. `files/mutable/cloud/…`) never expose vault file names to other
+        // local users. Pre-existing directories are left alone (they may be
+        // shared system paths).
+        let mut current = std::path::PathBuf::new();
+        for component in path.components() {
+            current.push(component);
+            if current.as_os_str().is_empty() {
+                continue;
+            }
+            match tokio::fs::metadata(&current).await {
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let mut builder = tokio::fs::DirBuilder::new();
+                    #[cfg(unix)]
+                    builder.mode(0o700);
+                    builder
+                        .create(&current)
+                        .await
+                        .map_err(|e| SecretsError::Backend(e.to_string()))?;
+                }
+                Err(e) => return Err(SecretsError::Backend(e.to_string())),
+            }
         }
         Ok(())
     }

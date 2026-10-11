@@ -16,6 +16,19 @@ pub struct ExecOutput {
     pub stderr: Vec<u8>,
 }
 
+/// Cap on buffered command output per stream (matches the capture limit, SOUL
+/// §3.3.3). Output beyond the cap is dropped: a runaway command (`yes`) or a
+/// misbehaving agent must not be able to exhaust controller/agent memory.
+pub const MAX_OUTPUT_BYTES: usize = crate::source::CAPTURE_MAX_BYTES;
+
+fn push_bounded(buf: &mut Vec<u8>, data: &[u8]) {
+    if buf.len() >= MAX_OUTPUT_BYTES {
+        return;
+    }
+    let room = MAX_OUTPUT_BYTES - buf.len();
+    buf.extend_from_slice(&data[..data.len().min(room)]);
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum OutputStream {
     Stdout,
@@ -203,8 +216,8 @@ impl LocalShellExecutor {
                     match maybe {
                         Some(chunk) => {
                             match chunk.stream {
-                                OutputStream::Stdout => stdout_buf.extend_from_slice(&chunk.data),
-                                OutputStream::Stderr => stderr_buf.extend_from_slice(&chunk.data),
+                                OutputStream::Stdout => push_bounded(&mut stdout_buf, &chunk.data),
+                                OutputStream::Stderr => push_bounded(&mut stderr_buf, &chunk.data),
                             }
                             if let Some(tx) = output {
                                 let _ = tx.send(chunk);
@@ -219,8 +232,8 @@ impl LocalShellExecutor {
                     join_reader(stderr_task.take()).await?;
                     while let Ok(chunk) = chunk_rx.try_recv() {
                         match chunk.stream {
-                            OutputStream::Stdout => stdout_buf.extend_from_slice(&chunk.data),
-                            OutputStream::Stderr => stderr_buf.extend_from_slice(&chunk.data),
+                            OutputStream::Stdout => push_bounded(&mut stdout_buf, &chunk.data),
+                            OutputStream::Stderr => push_bounded(&mut stderr_buf, &chunk.data),
                         }
                         if let Some(tx) = output {
                             let _ = tx.send(chunk);

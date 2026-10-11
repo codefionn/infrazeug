@@ -19,7 +19,19 @@ pub struct DataKeyEnvelope {
     /// Empty only for legacy envelopes written before authentication existed.
     #[serde(default)]
     pub auth: Vec<u8>,
+    /// Envelope-auth generation: `0` for pre-authentication legacy envelopes
+    /// (which may carry an empty `auth`), [`ENVELOPE_AUTH_VERSION`] once
+    /// [`seal_envelope_auth`] has run. Tripwire: an envelope that claims a
+    /// sealed generation must carry a valid tag, so merely deleting the `auth`
+    /// field from a sealed envelope no longer passes it off as legacy. (Not
+    /// MAC-covered: an attacker who deletes the tag could delete this marker
+    /// too, so covering it would only break compatibility with existing seals.)
+    #[serde(default)]
+    pub auth_version: u32,
 }
+
+/// Current envelope-auth generation written by [`seal_envelope_auth`].
+pub const ENVELOPE_AUTH_VERSION: u32 = 1;
 
 const ENVELOPE_AUTH_INFO: &[u8] = b"infrazeug-envelope-auth-v1";
 
@@ -30,11 +42,25 @@ fn envelope_auth_key(dek: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// Canonical bytes the auth tag covers: the envelope with `auth` cleared.
+/// Canonical bytes the auth tag covers: the envelope with `auth` cleared and
+/// without `auth_version` — i.e. exactly the fields that pre-authentication
+/// envelopes had, so seals produced by every version of this code verify.
 fn envelope_auth_aad(envelope: &DataKeyEnvelope) -> Result<Vec<u8>> {
-    let mut probe = envelope.clone();
-    probe.auth = Vec::new();
-    Ok(serde_cbor::to_vec(&probe)?)
+    // Mirrors the pre-`auth_version` field set of `DataKeyEnvelope`.
+    #[derive(Serialize)]
+    struct AuthAad<'a> {
+        id: &'a str,
+        file_salt: &'a [u8; 32],
+        recipients: &'a [RecipientEntry],
+        auth: Vec<u8>,
+    }
+    let aad = AuthAad {
+        id: &envelope.id,
+        file_salt: &envelope.file_salt,
+        recipients: &envelope.recipients,
+        auth: Vec::new(),
+    };
+    Ok(serde_cbor::to_vec(&aad)?)
 }
 
 /// Compute and store the envelope authentication tag. Call on every mutation
@@ -42,6 +68,7 @@ fn envelope_auth_aad(envelope: &DataKeyEnvelope) -> Result<Vec<u8>> {
 pub fn seal_envelope_auth(envelope: &mut DataKeyEnvelope, dek: &[u8; 32]) -> Result<()> {
     envelope.auth = Vec::new();
     let aad = envelope_auth_aad(envelope)?;
+    envelope.auth_version = ENVELOPE_AUTH_VERSION;
     let key = envelope_auth_key(dek);
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
     let mut nonce = [0u8; 24];
@@ -62,11 +89,27 @@ pub fn seal_envelope_auth(envelope: &mut DataKeyEnvelope, dek: &[u8; 32]) -> Res
 }
 
 /// Verify the envelope authentication tag against the unlocked DEK. Rejects
-/// tampered or unauthenticated envelopes. Legacy envelopes with an empty `auth`
-/// skip verification until [`crate::migrate::migrate_envelope_after_unlock`].
+/// tampered or unauthenticated envelopes.
+///
+/// - A non-empty `auth` is always verified against the MAC (regardless of
+///   `auth_version`, so seals written before the marker existed keep working).
+/// - An empty `auth` is accepted only for genuinely legacy envelopes
+///   (`auth_version` 0) and is upgraded on the next unlock, see
+///   [`crate::migrate::migrate_envelope_after_unlock`].
+/// - An envelope that claims a sealed generation (`auth_version` > 0) but has
+///   no tag is rejected: deleting the `auth` field from a sealed envelope no
+///   longer passes it off as legacy.
 pub fn verify_envelope_auth(envelope: &DataKeyEnvelope, dek: &[u8; 32]) -> Result<()> {
     if envelope.auth.is_empty() {
+        if envelope.auth_version != 0 {
+            return Err(SecretsError::BadSignature);
+        }
         return Ok(());
+    }
+    if envelope.auth_version > ENVELOPE_AUTH_VERSION {
+        // Unknown envelope-auth generation: fail closed rather than verify
+        // with the wrong semantics.
+        return Err(SecretsError::BadSignature);
     }
     if envelope.auth.len() < 24 + 16 {
         return Err(SecretsError::BadSignature);
@@ -116,6 +159,7 @@ pub async fn create_envelope(
         file_salt,
         recipients: vec![entry],
         auth: Vec::new(),
+        auth_version: 0,
     };
     seal_envelope_auth(&mut envelope, dek)?;
     Ok(envelope)

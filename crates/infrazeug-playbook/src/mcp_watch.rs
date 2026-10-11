@@ -29,6 +29,8 @@ pub async fn run_mcp_watch(
     playbook_argv: Vec<OsString>,
 ) -> anyhow::Result<()> {
     let http_bind = parse_http_bind(&playbook_argv);
+    let http_token =
+        infrazeug_mcp::http::http_token(parse_http_token_file(&playbook_argv).as_deref())?;
     let (change_tx, mut change_rx) = mpsc::unbounded_channel();
     let _watcher = install_source_watcher(&project.manifest_dir, change_tx)?;
     let proxy = WatchProxy::new();
@@ -40,10 +42,11 @@ pub async fn run_mcp_watch(
         let session_cancel = CancellationToken::new();
         let proxy_serve = proxy.clone();
         let serve_bind = http_bind.clone();
+        let serve_token = http_token.clone();
         let serve_cancel = session_cancel.clone();
         let mut serve_task = tokio::spawn(async move {
             if let Some(bind) = serve_bind {
-                proxy_serve.serve_http(&bind, serve_cancel).await
+                proxy_serve.serve_http(&bind, serve_token, serve_cancel).await
             } else {
                 proxy_serve.serve_stdio(serve_cancel).await
             }
@@ -177,14 +180,23 @@ async fn wait_child_or_change(
 }
 
 fn parse_http_bind(argv: &[OsString]) -> Option<String> {
+    parse_flag_value(argv, "--http")
+}
+
+fn parse_http_token_file(argv: &[OsString]) -> Option<String> {
+    parse_flag_value(argv, "--http-token-file")
+}
+
+/// Value of `--flag VALUE` or `--flag=VALUE` in `argv`.
+fn parse_flag_value(argv: &[OsString], flag: &str) -> Option<String> {
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
         let s = arg.to_string_lossy();
-        if s == "--http" {
+        if s == flag {
             return iter.next().map(|a| a.to_string_lossy().into_owned());
         }
-        if let Some(addr) = s.strip_prefix("--http=") {
-            return Some(addr.to_string());
+        if let Some(value) = s.strip_prefix(&format!("{flag}=")) {
+            return Some(value.to_string());
         }
     }
     None

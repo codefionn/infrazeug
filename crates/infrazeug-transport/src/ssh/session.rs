@@ -95,20 +95,11 @@ impl SshSession {
             "-o".into(),
             "LogLevel=ERROR".into(),
         ]);
-        for opt in &self.ssh_config.extra_opts {
-            args.push("-o".into());
-            args.push(opt.clone());
-        }
-        // Enforced after extras so a stray playbook AddressFamily cannot relax it.
-        if let Some(opt) = self.ssh_config.address_family_opt() {
-            args.push("-o".into());
-            args.push(opt);
-        }
-        if let Some(port) = port {
-            args.push("-o".into());
-            args.push(format!("Port={port}"));
-        }
-        // Non-interactive transport (overrides playbook extras like RequestTTY=force).
+        // NOTE: OpenSSH takes the *first* obtained value for duplicate `-o`
+        // options, so every option that must not be relaxed by playbook
+        // `extra_opts` has to be pushed BEFORE them. (Placing them after would
+        // let a stray playbook `RequestTTY=force` / `AddressFamily` win.)
+        // Non-interactive transport (wins over playbook extras like RequestTTY=force).
         for opt in [
             "RequestTTY=no",
             "ConnectTimeout=30",
@@ -117,6 +108,18 @@ impl SshSession {
         ] {
             args.push("-o".into());
             args.push(opt.into());
+        }
+        if let Some(opt) = self.ssh_config.address_family_opt() {
+            args.push("-o".into());
+            args.push(opt);
+        }
+        if let Some(port) = port {
+            args.push("-o".into());
+            args.push(format!("Port={port}"));
+        }
+        for opt in &self.ssh_config.extra_opts {
+            args.push("-o".into());
+            args.push(opt.clone());
         }
         args
     }
@@ -556,14 +559,20 @@ impl SshSession {
         })
     }
 
+    /// Download a remote file over sftp into memory.
+    ///
+    /// The remote path is interpolated into an sftp batch script, where newline
+    /// separates commands and `!` runs a local command — so path bytes that could
+    /// change the batch's meaning are rejected before use.
     pub async fn download_bytes(&self, remote_path: &str) -> Result<Vec<u8>> {
+        validate_sftp_path(remote_path)?;
         let tmp = format!(
             "{}/.infrazeug-download-{}",
             self.run_dir.display(),
             uuid::Uuid::new_v4()
         );
         let batch = format!(
-            "get {remote_path} {tmp}\n",
+            "get \"{remote_path}\" \"{tmp}\"\n",
             tmp = tmp,
             remote_path = remote_path
         );
@@ -574,6 +583,27 @@ impl SshSession {
         let _ = tokio::fs::remove_file(&tmp).await;
         Ok(data)
     }
+}
+
+/// Reject path bytes that could change the meaning of an sftp batch script.
+///
+/// sftp `-b` treats newline as a command separator and `!cmd` as a local
+/// command to execute on the controller, and its argument parser honors `"`
+/// quoting and `\` escapes. Callers therefore interpolate only validated
+/// paths, wrapped in double quotes (see `download_bytes`).
+fn validate_sftp_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(TransportError::Other("sftp path is empty".into()));
+    }
+    if path
+        .chars()
+        .any(|c| c.is_control() || c == '"' || c == '\\')
+    {
+        return Err(TransportError::Other(format!(
+            "path contains bytes that are unsafe for sftp batch use: {path:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Directory holding SSH mux sockets for a run.

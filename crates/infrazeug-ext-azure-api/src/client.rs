@@ -29,7 +29,13 @@ pub struct AzureClient {
 impl AzureClient {
     pub fn new(config: AzureConfig) -> Self {
         Self {
-            http: Client::new(),
+            // Bounded timeouts: without them a stalled peer hangs the apply run
+            // forever (reqwest has no default request timeout).
+            http: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             config,
         }
     }

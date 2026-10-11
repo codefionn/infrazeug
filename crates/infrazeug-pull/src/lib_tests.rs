@@ -1,17 +1,78 @@
 #[cfg(test)]
 mod tests {
-    use crate::publish::{machine_keygen, publish_slice, register_machine_pubkey, PublishOptions};
+    use crate::publish::{
+        machine_keygen, publish_slice, register_machine_pubkey, revoke_machine,
+        tombstone_is_authentic, PublishOptions,
+    };
     use crate::serve::apply_sealed_slice;
     use crate::store::PlanStore;
     use infrazeug_core::id::{MachineId, NodeId};
     use infrazeug_core::node::{Node, NodeBody, Targets};
     use infrazeug_core::slice::SliceMode;
     use infrazeug_core::Infra;
-    use infrazeug_secrets::{verifying_key_from_seed, FsBackend};
+    use infrazeug_secrets::{generate_signing_key, verifying_key_from_seed, FsBackend};
     use infrazeug_shell::ShellOp;
     use std::sync::Arc;
     use tempfile::tempdir;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn signed_tombstone_revokes_and_forged_one_does_not() {
+        let dir = tempdir().unwrap();
+        let store = PlanStore::new(Arc::new(FsBackend::new(dir.path())));
+        let machine = Uuid::new_v4();
+        let signer = generate_signing_key();
+        let trusted = [signer.verifying_key().to_bytes()];
+
+        revoke_machine(&store, machine, false, Some(&signer), "cli")
+            .await
+            .unwrap();
+        assert!(store.is_revoked(machine, &trusted).await.unwrap());
+
+        // An attacker with store write access plants a tombstone (including a
+        // `revoke-with-teardown` one) for another machine: rejected.
+        let victim = Uuid::new_v4();
+        store
+            .put_tombstone(victim, b"revoke-with-teardown")
+            .await
+            .unwrap();
+        assert!(!store.is_revoked(victim, &trusted).await.unwrap());
+    }
+
+    #[test]
+    fn tombstone_authenticity_rules() {
+        let machine = Uuid::new_v4();
+        let signer = generate_signing_key();
+        let trusted = [signer.verifying_key().to_bytes()];
+
+        // Signature from a non-trusted key: rejected.
+        let rogue = generate_signing_key();
+        let body = crate::publish::tombstone_body(machine, "revoked", Some(&rogue), "evil").unwrap();
+        assert!(!tombstone_is_authentic(machine, &body, &trusted).unwrap());
+
+        // Unknown action: rejected even when signed by a trusted key.
+        let body =
+            crate::publish::tombstone_body(machine, "wipe-everything", Some(&signer), "cli")
+                .unwrap();
+        assert!(!tombstone_is_authentic(machine, &body, &trusted).unwrap());
+
+        // Legacy plain text with trusted signers configured: rejected.
+        assert!(!tombstone_is_authentic(machine, b"revoked", &trusted).unwrap());
+        // …but honored when no trust anchor exists (fail-closed on revocation).
+        assert!(tombstone_is_authentic(machine, b"revoked", &[]).unwrap());
+
+        // Correct signed tombstone: accepted.
+        let body = crate::publish::tombstone_body(
+            machine,
+            "revoke-with-teardown",
+            Some(&signer),
+            "cli",
+        )
+        .unwrap();
+        assert!(tombstone_is_authentic(machine, &body, &trusted).unwrap());
+        // …and only for the machine it was signed for.
+        assert!(!tombstone_is_authentic(Uuid::new_v4(), &body, &trusted).unwrap());
+    }
 
     #[tokio::test]
     async fn publish_and_apply_pull_slice() {

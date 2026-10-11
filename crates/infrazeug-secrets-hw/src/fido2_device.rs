@@ -140,7 +140,9 @@ impl Provider for Fido2Device {
         rand::thread_rng().fill_bytes(&mut salt);
         let secret = self.hmac_secret(&device, &credential_id, &salt)?;
         let kek = Self::derive_kek(&secret, &ctx.data_key_id);
-        let wrapped_key = seal(&kek, dek)?;
+        // Bind the wrapped DEK to its envelope context (data key id + salt).
+        let aad = infrazeug_secrets::kek::challenge(&ctx.data_key_id, &ctx.file_salt);
+        let wrapped_key = seal(&kek, dek, &aad)?;
 
         let b64 = base64::engine::general_purpose::STANDARD;
         Ok(RecipientEntry {
@@ -180,6 +182,7 @@ impl Provider for Fido2Device {
         let device = Self::device()?;
         let secret = self.hmac_secret(&device, &credential_id, &salt)?;
         let kek = Self::derive_kek(&secret, &ctx.data_key_id);
-        open(&kek, &entry.wrapped_key)
+        let aad = infrazeug_secrets::kek::challenge(&ctx.data_key_id, &ctx.file_salt);
+        open(&kek, &entry.wrapped_key, &aad)
     }
 }

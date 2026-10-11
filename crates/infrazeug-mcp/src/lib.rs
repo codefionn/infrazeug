@@ -27,7 +27,7 @@ mod builtins;
 mod ctx;
 mod docs;
 mod exec;
-mod http;
+pub mod http;
 mod server;
 mod watch;
 

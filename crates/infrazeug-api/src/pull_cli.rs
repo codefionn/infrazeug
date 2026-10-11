@@ -6,7 +6,7 @@ use infrazeug_core::id::MachineId;
 use infrazeug_core::slice::SliceMode;
 use infrazeug_pull::{
     machine_keygen, open_fs_store, parse_bootstrap, parse_trusted_signers, publish_slice,
-    register_machine_pubkey, revoke_machine, run_from_bootstrap, run_oneshot, PlanStore,
+    register_machine_pubkey, revoke_machine, run_from_bootstrap, run_oneshot, Bootstrap, PlanStore,
     PublishOptions,
 };
 use infrazeug_secrets::FsBackend;
@@ -150,6 +150,12 @@ pub enum PlanCmd {
         store: PathBuf,
         #[arg(long)]
         with_teardown: bool,
+        /// Hex-encoded Ed25519 signing seed. Strongly recommended: unsigned
+        /// tombstones are rejected by daemons with a trusted-signer set.
+        #[arg(long)]
+        sign_with: Option<String>,
+        #[arg(long, default_value = "cli")]
+        signer_id: String,
     },
     Slice {
         #[arg(long)]
@@ -262,10 +268,31 @@ pub async fn dispatch_pull(
                 for_machine,
                 store,
                 with_teardown,
+                sign_with,
+                signer_id,
             } => {
                 let backend = Arc::new(FsBackend::new(store));
                 let plan_store = PlanStore::new(backend);
-                revoke_machine(&plan_store, *for_machine, *with_teardown).await?;
+                let signing_seed = sign_with.as_ref().and_then(|h| {
+                    hex::decode(h).ok().and_then(|v| {
+                        if v.len() == 32 {
+                            let mut s = [0u8; 32];
+                            s.copy_from_slice(&v);
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    })
+                });
+                let key = signing_seed.map(|s| infrazeug_secrets::signing_key_from_seed(&s));
+                revoke_machine(
+                    &plan_store,
+                    *for_machine,
+                    *with_teardown,
+                    key.as_ref(),
+                    signer_id,
+                )
+                .await?;
                 println!("revoked {for_machine}");
             }
             PlanCmd::Slice { for_machine, mode } => {
@@ -312,22 +339,39 @@ pub async fn dispatch_pull(
                     "bootstrap machine={} plan_url={} agent_digest={}",
                     bootstrap.machine_id, bootstrap.plan_url, bootstrap.agent_digest
                 );
-                let agent =
-                    std::env::var("INFRAZEUG_AGENT").unwrap_or_else(|_| "infrazeug-agent".into());
-                let status = std::process::Command::new(&agent)
-                    .args([
-                        "serve-pull",
-                        "--store",
-                        bootstrap.plan_url.trim_end_matches('/'),
-                        "--machine",
-                        &bootstrap.machine_id.to_string(),
-                        "--key",
-                        bootstrap
-                            .machine_key
-                            .to_str()
-                            .ok_or_else(|| anyhow::anyhow!("machine_key path"))?,
-                    ])
-                    .status()?;
+                // Forward the bootstrapped plan-signer trust set: without it the
+                // delegated agent has no signers to trust and would either fail
+                // closed (today) or, worse, a future "fix" might make it apply
+                // untrusted plans. Empty trust is refused here as well.
+                let signers: Vec<&str> = bootstrap
+                    .plan_signer
+                    .split([',', ' ', '\t', '\n', '\r'])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if signers.is_empty() {
+                    anyhow::bail!(
+                        "bootstrap plan_signer is empty; refusing to delegate without trusted plan signers"
+                    );
+                }
+                let agent_path = resolve_verified_agent(&bootstrap).await?;
+                let mut cmd = std::process::Command::new(&agent_path);
+                cmd.args([
+                    "serve-pull",
+                    "--store",
+                    bootstrap.plan_url.trim_end_matches('/'),
+                    "--machine",
+                    &bootstrap.machine_id.to_string(),
+                    "--key",
+                    bootstrap
+                        .machine_key
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("machine_key path"))?,
+                ]);
+                for signer in &signers {
+                    cmd.args(["--trust", signer]);
+                }
+                let status = cmd.status()?;
                 if !status.success() {
                     anyhow::bail!("agent serve-pull failed: {status}");
                 }
@@ -335,6 +379,60 @@ pub async fn dispatch_pull(
         },
     }
     Ok(())
+}
+
+/// Resolve the agent binary to delegate to, verifying it before execution
+/// (SOUL M6: custom-agent distribution with detached signature verification).
+///
+/// The agent artifact is read from the plan store (`agents/{digest}/{triple}/`)
+/// together with its detached signature (`agents/{digest}.sig`), checked against
+/// the bootstrap's `agent_digest` and `agent_signer`, then written to a private
+/// temp file for execution. Running an unverified binary from `INFRAZEUG_AGENT`
+/// requires the explicit `INFRAZEUG_ALLOW_UNVERIFIED_AGENT=1` opt-in.
+async fn resolve_verified_agent(bootstrap: &Bootstrap) -> anyhow::Result<PathBuf> {
+    use infrazeug_pull::verify_agent_artifact;
+
+    if let Ok(path) = std::env::var("INFRAZEUG_AGENT") {
+        let opt_in = std::env::var("INFRAZEUG_ALLOW_UNVERIFIED_AGENT").as_deref() == Ok("1");
+        if !opt_in {
+            anyhow::bail!(
+                "INFRAZEUG_AGENT is set but the bootstrapped agent must be digest- and \
+                 signature-verified; set INFRAZEUG_ALLOW_UNVERIFIED_AGENT=1 to run it unverified"
+            );
+        }
+        eprintln!("[bootstrap] WARNING: running UNVERIFIED agent from INFRAZEUG_AGENT={path}");
+        return Ok(PathBuf::from(path));
+    }
+
+    let triple = infrazeug_build::host_triple().unwrap_or_else(|| "host".to_string());
+    let store = open_fs_store(bootstrap.plan_url.trim_end_matches('/'));
+    let digest = bootstrap.agent_digest.trim().trim_start_matches("sha256:");
+    let agent_bytes = store
+        .get_agent(digest, &triple)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("agent artifact agents/{digest}/{triple} not in store"))?;
+    let sig = store.get_agent_sig(digest).await?.ok_or_else(|| {
+        anyhow::anyhow!("agent signature agents/{digest}.sig not in store; refusing to run")
+    })?;
+    verify_agent_artifact(&agent_bytes, &bootstrap.agent_digest, &sig, &bootstrap.agent_signer)
+        .map_err(|e| anyhow::anyhow!("agent verification failed: {e}"))?;
+
+    // Exec the verified bytes from a private temp file (0700 dir, 0755 file).
+    let dir = std::env::temp_dir().join(format!("infrazeug-bootstrap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let path = dir.join("infrazeug-agent");
+    std::fs::write(&path, &agent_bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(path)
 }
 
 pub(crate) fn attach_pull_subcommands(

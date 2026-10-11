@@ -625,7 +625,8 @@ pub async fn apply_bundle(
         guard.teardown().ok();
         Ok(report)
     } else {
-        let interact: Arc<dyn Interactor> = if atty::is(atty::Stream::Stdin) {
+        let interact: Arc<dyn Interactor> = if std::io::IsTerminal::is_terminal(&std::io::stdin())
+        {
             Arc::new(LineInteractor)
         } else {
             Arc::new(AutoDenyInteractor)
@@ -718,20 +719,32 @@ pub(crate) async fn run_infra_collect(
     let map = captures.lookup_map().await?;
     let captures = map
         .into_iter()
-        .map(|((node, machine), bytes)| infrazeug_mcp::CaptureOut {
-            node: prepared
-                .infra
-                .nodes
-                .iter()
-                .find(|n| n.id.0 == node)
-                .map(|n| n.name.to_string())
-                .unwrap_or_else(|| node.to_string()),
-            machine: prepared
-                .infra
-                .machine_by_id(infrazeug_core::MachineId(machine))
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| machine.to_string()),
-            stdout: String::from_utf8_lossy(&bytes).into_owned(),
+        .map(|((node, machine), bytes)| {
+            // Captures feeding `VaultWrite` carry generated secret material on
+            // its way to the vault: never surface their bytes (SOUL: MCP tools
+            // never expose secrets). Everything else is scrubbed for
+            // secret-shaped tokens as defense in depth.
+            let secret = infrazeug_core::capture::capture_is_secret(&prepared.infra, node, machine);
+            let stdout = if secret {
+                "<redacted>".to_string()
+            } else {
+                infrazeug_core::secret_scan::redact_secrets(&String::from_utf8_lossy(&bytes))
+            };
+            infrazeug_mcp::CaptureOut {
+                node: prepared
+                    .infra
+                    .nodes
+                    .iter()
+                    .find(|n| n.id.0 == node)
+                    .map(|n| n.name.to_string())
+                    .unwrap_or_else(|| node.to_string()),
+                machine: prepared
+                    .infra
+                    .machine_by_id(infrazeug_core::MachineId(machine))
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| machine.to_string()),
+                stdout,
+            }
         })
         .collect();
     Ok(infrazeug_mcp::ToolRun { report, captures })

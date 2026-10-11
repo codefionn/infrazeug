@@ -150,6 +150,9 @@ fn normalize_envelope_recipients(envelope: &mut DataKeyEnvelope) -> bool {
         return false;
     }
     envelope.auth.clear();
+    // The recipient set changed, so the old tag is invalid: mark the envelope
+    // as pending re-seal (legacy generation) until the next unlock re-tags it.
+    envelope.auth_version = 0;
     true
 }
 
@@ -200,6 +203,7 @@ mod tests {
             file_salt: [1u8; 32],
             recipients: vec![],
             auth: Vec::new(),
+            auth_version: 0,
         };
         let provider = PassphraseProvider::new("hunter2");
         let entry = provider
@@ -224,6 +228,49 @@ mod tests {
         assert!(migrate_envelope_after_unlock(&mut envelope, &dek).unwrap());
         assert!(!envelope.auth.is_empty());
         verify_envelope_auth(&envelope, &dek).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stripping_auth_from_sealed_envelope_is_rejected() {
+        use crate::envelope::{generate_dek, seal_envelope_auth, verify_envelope_auth, ENVELOPE_AUTH_VERSION};
+
+        let dek = generate_dek();
+        let mut envelope = DataKeyEnvelope {
+            id: "prod".into(),
+            file_salt: [1u8; 32],
+            recipients: vec![],
+            auth: Vec::new(),
+            auth_version: 0,
+        };
+        seal_envelope_auth(&mut envelope, &dek).unwrap();
+        assert_eq!(envelope.auth_version, ENVELOPE_AUTH_VERSION);
+
+        // Downgrade attack: delete the `auth` field to pass the envelope off as
+        // pre-authentication legacy — must be rejected because the envelope
+        // still claims a sealed generation.
+        envelope.auth.clear();
+        assert!(verify_envelope_auth(&envelope, &dek).is_err());
+    }
+
+    #[tokio::test]
+    async fn sealed_envelope_with_forged_legacy_marker_fails_mac() {
+        use crate::envelope::{generate_dek, seal_envelope_auth, verify_envelope_auth};
+
+        let dek = generate_dek();
+        let mut envelope = DataKeyEnvelope {
+            id: "prod".into(),
+            file_salt: [1u8; 32],
+            recipients: vec![],
+            auth: Vec::new(),
+            auth_version: 0,
+        };
+        seal_envelope_auth(&mut envelope, &dek).unwrap();
+
+        // Forging the legacy marker alone must not help: the tag still has to
+        // verify over the tampered envelope.
+        envelope.auth_version = 0;
+        envelope.id = "other".into();
+        assert!(verify_envelope_auth(&envelope, &dek).is_err());
     }
 
     #[tokio::test]

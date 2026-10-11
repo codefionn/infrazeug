@@ -28,7 +28,7 @@ use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 use hkdf::Hkdf;
-use infrazeug_secrets::kek::{open, seal};
+use infrazeug_secrets::kek::{challenge, open, seal};
 use infrazeug_secrets::provider::{Provider, ProviderKind, RecipientEntry, WrapCtx};
 use infrazeug_secrets::{Result, SecretsError};
 use sha2::Sha256;
@@ -157,7 +157,9 @@ impl Provider for Pkcs11Device {
             .map_err(Self::err)?;
 
         let kek = Self::derive_kek(&seed, &ctx.data_key_id);
-        let wrapped_key = seal(&kek, dek)?;
+        // Bind the wrapped DEK to its envelope context (data key id + salt).
+        let aad = challenge(&ctx.data_key_id, &ctx.file_salt);
+        let wrapped_key = seal(&kek, dek, &aad)?;
 
         Ok(RecipientEntry {
             kind: ProviderKind::Pkcs11,
@@ -189,6 +191,7 @@ impl Provider for Pkcs11Device {
             .map_err(Self::err)?;
 
         let kek = Self::derive_kek(&seed, &ctx.data_key_id);
-        open(&kek, &entry.wrapped_key)
+        let aad = challenge(&ctx.data_key_id, &ctx.file_salt);
+        open(&kek, &entry.wrapped_key, &aad)
     }
 }

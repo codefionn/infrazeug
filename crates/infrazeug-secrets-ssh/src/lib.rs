@@ -50,29 +50,46 @@ impl SshAgentProvider {
         ssh_agent_sign(&self.key_comment, challenge).await
     }
 
-    fn seal(kek: &[u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>> {
+    /// Seal the DEK under the KEK, bound to the envelope context (`aad`) so a
+    /// `wrapped_key` cannot be lifted into a different envelope undetected.
+    fn seal(kek: &[u8; 32], dek: &[u8; 32], aad: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; 24];
         rand::thread_rng().fill_bytes(&mut nonce);
         let key = Key::from_slice(kek);
         let cipher = XChaCha20Poly1305::new(key);
         let ct = cipher
-            .encrypt(XNonce::from_slice(&nonce), dek.as_ref())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                chacha20poly1305::aead::Payload {
+                    msg: dek.as_ref(),
+                    aad,
+                },
+            )
             .map_err(|_| SecretsError::Decrypt)?;
         let mut out = nonce.to_vec();
         out.extend(ct);
         Ok(out)
     }
 
-    fn open(kek: &[u8; 32], blob: &[u8]) -> Result<Vec<u8>> {
+    /// Open a [`Self::seal`]ed blob. Falls back to verifying without AAD for
+    /// keys sealed before context binding existed (legacy recipients keep
+    /// unlocking; new seals are always bound).
+    fn open(kek: &[u8; 32], blob: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         if blob.len() < 24 {
             return Err(SecretsError::Provider("wrapped dek short".into()));
         }
         let (nonce, ct) = blob.split_at(24);
         let key = Key::from_slice(kek);
         let cipher = XChaCha20Poly1305::new(key);
-        cipher
-            .decrypt(XNonce::from_slice(nonce), ct)
-            .map_err(|_| SecretsError::Decrypt)
+        let bound = cipher.decrypt(
+            XNonce::from_slice(nonce),
+            chacha20poly1305::aead::Payload { msg: ct, aad },
+        );
+        bound.or_else(|_| {
+            cipher
+                .decrypt(XNonce::from_slice(nonce), ct)
+                .map_err(|_| SecretsError::Decrypt)
+        })
     }
 }
 
@@ -86,7 +103,7 @@ impl Provider for SshAgentProvider {
         let challenge = Self::challenge(ctx);
         let sig = self.sign_challenge(&challenge).await?;
         let kek = Self::derive_kek(&sig, &ctx.data_key_id);
-        let wrapped_key = Self::seal(&kek, dek)?;
+        let wrapped_key = Self::seal(&kek, dek, &challenge)?;
         Ok(RecipientEntry {
             kind: ProviderKind::SshAgent,
             label: label.to_string(),
@@ -99,6 +116,6 @@ impl Provider for SshAgentProvider {
         let challenge = Self::challenge(ctx);
         let sig = self.sign_challenge(&challenge).await?;
         let kek = Self::derive_kek(&sig, &ctx.data_key_id);
-        Self::open(&kek, &entry.wrapped_key)
+        Self::open(&kek, &entry.wrapped_key, &challenge)
     }
 }

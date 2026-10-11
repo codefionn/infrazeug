@@ -17,15 +17,20 @@ pub async fn probe_uname_machine(ssh: &SshConfig, askpass_file: Option<&Path>) -
     for a in &auth_args {
         cmd.arg(a);
     }
+    // Keep the probe's policy uniform with real sessions: same host-key
+    // handling, and enforced options BEFORE extras (OpenSSH takes the first
+    // obtained value for duplicate `-o` options). BatchMode/NumberOfPasswordPrompts
+    // come from `push_auth_mode_args` so interactive auth still works.
+    cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
     cmd.arg("-o").arg("ConnectTimeout=10");
-    for opt in &ssh.extra_opts {
-        cmd.arg("-o").arg(opt);
-    }
     if let Some(opt) = ssh.address_family_opt() {
         cmd.arg("-o").arg(opt);
     }
     if let Some(port) = port {
         cmd.arg("-o").arg(format!("Port={port}"));
+    }
+    for opt in &ssh.extra_opts {
+        cmd.arg("-o").arg(opt);
     }
     cmd.arg(&dest).arg("uname").arg("-m");
     set_askpass_env(&mut cmd, askpass_file);

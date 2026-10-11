@@ -29,6 +29,18 @@ pub struct AuthentikClient {
     token: String,
 }
 
+/// Default HTTP client with bounded timeouts (10 s connect, 30 s per request).
+///
+/// Without them any stall is an infinite hang that blocks the whole apply; the
+/// deadlines turn it into a clear, retryable error instead.
+fn default_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 impl AuthentikClient {
     /// `base_url` is the instance root, for example `https://auth.example`.
     pub fn new(base_url: impl AsRef<str>, token: impl Into<String>) -> Result<Self> {
@@ -43,7 +55,7 @@ impl AuthentikClient {
         base.set_query(None);
         base.set_fragment(None);
         Ok(Self {
-            http: reqwest::Client::new(),
+            http: default_http_client(),
             base,
             token: token.into(),
         })

@@ -22,13 +22,25 @@ pub struct WrapCtx {
     pub file_salt: [u8; 32],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecipientEntry {
     pub kind: ProviderKind,
     pub label: String,
     pub wrapped_key: Vec<u8>,
     #[serde(default)]
     pub params: serde_json::Value,
+}
+
+impl std::fmt::Debug for RecipientEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `wrapped_key` is the offline-crackable DEK ciphertext: never print it.
+        f.debug_struct("RecipientEntry")
+            .field("kind", &self.kind)
+            .field("label", &self.label)
+            .field("wrapped_key", &format_args!("<{} bytes>", self.wrapped_key.len()))
+            .field("params", &self.params)
+            .finish()
+    }
 }
 
 #[async_trait]

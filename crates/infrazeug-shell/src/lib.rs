@@ -21,6 +21,7 @@
 //! Extension crates (`infrazeug-kubectl`, `infrazeug-helm`, …) return `ShellOp`
 //! values so the same nodes work in agentless SSH and agent push modes.
 
+pub mod depth;
 pub mod error;
 pub mod local;
 pub mod lower;
@@ -35,8 +36,8 @@ pub use lower::{lower, Lowered};
 pub use op::{EnvVarSource, ShellOp, SyncDirOptions};
 pub use resolve::{resolve_shell_op, CaptureLookup};
 pub use source::{
-    capture_refs, CaptureRef, FileSource, FileSourceTransform, PasswordHashAlgorithm,
-    PasswordHashSpec, RandomPasswordSpec, CAPTURE_MAX_BYTES,
+    capture_refs, secret_capture_refs, CaptureRef, FileSource, FileSourceTransform,
+    PasswordHashAlgorithm, PasswordHashSpec, RandomPasswordSpec, CAPTURE_MAX_BYTES,
 };
 pub use sync_dir::{pack_sync_plan, plan_sync_dir, sync_dir_to_local, SyncDirEntry, SyncDirPlan};
 

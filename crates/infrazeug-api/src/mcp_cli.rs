@@ -14,17 +14,31 @@ pub enum McpServeMode {
     /// JSON-RPC over stdio (default; desktop MCP clients spawn the binary).
     Stdio,
     /// Streamable HTTP JSON-RPC server on `ADDR` (e.g. `127.0.0.1:7777`).
-    Http(String),
+    Http {
+        addr: String,
+        /// Bearer token required of every client (required for non-loopback binds).
+        token: Option<String>,
+    },
 }
 
 impl McpServeMode {
     /// Parse `--stdio` / `--http ADDR` from clap (`--http` wins over default stdio).
-    pub fn from_cli(http: Option<&str>, stdio_flag: bool) -> anyhow::Result<Self> {
+    ///
+    /// The HTTP bearer token comes from `--http-token-file PATH` or the
+    /// `INFRAZEUG_MCP_HTTP_TOKEN` env var (see [`infrazeug_mcp::http::http_token`]).
+    pub fn from_cli(
+        http: Option<&str>,
+        stdio_flag: bool,
+        http_token_file: Option<&str>,
+    ) -> anyhow::Result<Self> {
         match (http, stdio_flag) {
             (Some(_), true) => {
                 anyhow::bail!("`mcp serve` cannot use both --stdio and --http");
             }
-            (Some(addr), false) => Ok(Self::Http(addr.to_string())),
+            (Some(addr), false) => Ok(Self::Http {
+                addr: addr.to_string(),
+                token: infrazeug_mcp::http::http_token(http_token_file)?,
+            }),
             (None, true) => Ok(Self::Stdio),
             (None, false) => Ok(Self::Stdio),
         }
@@ -35,6 +49,6 @@ impl McpServeMode {
 pub async fn dispatch_mcp_serve(builder: McpBuilder, mode: McpServeMode) -> anyhow::Result<()> {
     match mode {
         McpServeMode::Stdio => builder.serve_stdio().await,
-        McpServeMode::Http(bind) => builder.serve_http(bind).await,
+        McpServeMode::Http { addr, token } => builder.serve_http(addr, token).await,
     }
 }

@@ -17,7 +17,7 @@ type BuildFn = Arc<dyn Fn(Value, &McpCtx) -> anyhow::Result<Infra> + Send + Sync
 
 /// A registered custom tool: typed input → an [`Infra`] that gets executed.
 #[derive(Clone)]
-pub(crate) struct ToolDef {
+pub struct ToolDef {
     pub name: String,
     pub description: String,
     pub schema: Arc<JsonObject>,
@@ -101,7 +101,10 @@ impl McpBuilder {
     }
 
     /// Serve MCP over Streamable HTTP (JSON-RPC) at `bind` (e.g. `127.0.0.1:7777`).
-    pub async fn serve_http(self, bind: impl AsRef<str>) -> anyhow::Result<()> {
+    ///
+    /// `token`, when set, is required of every client as
+    /// `Authorization: Bearer <token>`. Non-loopback binds require a token.
+    pub async fn serve_http(self, bind: impl AsRef<str>, token: Option<String>) -> anyhow::Result<()> {
         let executor = self
             .executor
             .ok_or_else(|| anyhow::anyhow!("no InfraExecutor configured for the MCP server"))?;
@@ -112,6 +115,7 @@ impl McpBuilder {
             executor,
             self.server_name,
             bind.as_ref(),
+            token,
         )
         .await
     }

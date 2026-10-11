@@ -36,7 +36,7 @@ pub use mode::PullMode;
 pub use publish::{
     machine_keygen, publish_slice, register_machine_pubkey, revoke_machine, PublishOptions,
 };
-pub use serve::apply_sealed_slice;
+pub use serve::{apply_sealed_slice, verify_agent_artifact, verify_detached_agent_sig};
 pub use store::PlanStore;
 
 #[cfg(test)]

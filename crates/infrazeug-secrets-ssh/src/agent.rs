@@ -65,7 +65,10 @@ pub async fn ssh_agent_sign(comment: &str, data: &[u8]) -> Result<Vec<u8>> {
     body.extend_from_slice(&pubkey);
     body.extend_from_slice(&(data.len() as u32).to_be_bytes());
     body.extend_from_slice(data);
-    body.push(0); // SSH_AGENT_RSA_SHA2_256 / flags for ed25519 default
+    // PROTOCOL.agent: `uint32 flags`. `SSH_AGENT_RSA_SHA2_512` (4) requests
+    // RSA-SHA2 signatures for RSA keys; ed25519/ed448 ignore the flags.
+    // (flags = 0 would ask for legacy SHA-1 `ssh-rsa`, which modern hosts reject.)
+    body.extend_from_slice(&4u32.to_be_bytes());
 
     let mut req = vec![SSH_AGENTC_SIGN_REQUEST];
     req.extend_from_slice(&body);

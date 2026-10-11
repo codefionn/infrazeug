@@ -229,11 +229,26 @@ pub fn run_dir_name(run_id: RunId) -> String {
 
 impl RunGuard {
     pub fn new(config: &RuntimeConfig, run_id: RunId) -> std::io::Result<Self> {
-        std::fs::create_dir_all(&config.run_root)?;
+        // Run dirs hold SSH askpass secrets, mux sockets and capture spills:
+        // keep them owner-only.
+        let dir_mode = || {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut b = std::fs::DirBuilder::new();
+                b.mode(0o700);
+                b
+            }
+            #[cfg(not(unix))]
+            {
+                std::fs::DirBuilder::new()
+            }
+        };
+        dir_mode().recursive(true).create(&config.run_root)?;
         let run_dir = config.run_root.join(run_dir_name(run_id));
-        std::fs::create_dir_all(&run_dir)?;
+        dir_mode().recursive(true).create(&run_dir)?;
         // OpenSSH ControlPath (`…/m/%C`) does not create parent directories.
-        std::fs::create_dir_all(run_dir.join("m"))?;
+        dir_mode().recursive(true).create(run_dir.join("m"))?;
         Ok(Self { run_id, run_dir })
     }
 

@@ -8,6 +8,7 @@ pub type Argv = Vec<String>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EnvVarSource {
     pub name: String,
+    #[serde(deserialize_with = "crate::depth::de_file_source")]
     pub value: FileSource,
 }
 
@@ -32,6 +33,9 @@ pub enum ShellOp {
         env: Vec<EnvVarSource>,
     },
     Seq {
+        // Depth-guarded: postcard has no recursion limit and a crafted frame of
+        // deeply nested `Seq` steps would overflow the stack (see `depth`).
+        #[serde(deserialize_with = "crate::depth::de_shell_ops")]
         steps: Vec<ShellOp>,
     },
     ReadFile {
@@ -39,6 +43,7 @@ pub enum ShellOp {
     },
     WriteFile {
         path: PathBuf,
+        #[serde(deserialize_with = "crate::depth::de_file_source")]
         content: FileSource,
         mode: u32,
     },
@@ -47,6 +52,7 @@ pub enum ShellOp {
         data_key_id: String,
         file: String,
         field: String,
+        #[serde(deserialize_with = "crate::depth::de_file_source")]
         value: FileSource,
         /// Write-if-absent: an existing field is left untouched and the
         /// resolved value (e.g. a fresh random) is discarded. Set by the
