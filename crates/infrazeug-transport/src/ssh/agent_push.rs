@@ -72,6 +72,13 @@ impl AgentPushBackend {
             tracing::debug!(%dest, %remote_bin, "reusing cached infrazeug-agent");
         }
 
+        // Opportunistic cache hygiene: the cache accumulates one ~335MB binary
+        // per agent build plus staging leftovers from interrupted uploads.
+        let prune = agent_cache_prune_script(&remote_bin);
+        if let Err(err) = session.exec_remote(&[prune]).await {
+            tracing::debug!(%dest, %err, "agent cache prune skipped");
+        }
+
         tracing::debug!(%dest, "starting agent serve-rpc");
         let mut cmd = Command::new("ssh");
         for a in session.base_ssh_args() {
@@ -272,6 +279,22 @@ fn cached_agent_matches(code: i32, stdout: &[u8], expected_digest: &str) -> bool
 /// The digest is part of the name (content-addressed) and is re-verified
 /// against the cached remote file before reuse, so a tampered cache is never
 /// executed.
+/// Best-effort hygiene for the remote agent cache: every agent build pushes a
+/// new ~335MB binary and interrupted uploads leave staging files behind, which
+/// on small root filesystems adds up to disk pressure within weeks. Keeps the
+/// binary we are about to run plus the newest other one (in case a concurrent
+/// session runs a different build), drops day-old staging files only, and never
+/// fails the connect — cleanup is opportunistic, correctness never depends on it.
+fn agent_cache_prune_script(remote_bin: &str) -> String {
+    format!(
+        "( dir=$(dirname {bin}); keep=$(basename {bin}); \
+           find \"$dir\" -maxdepth 1 -type f -name '*.infrazeug-staging-*' -mmin +1440 -delete 2>/dev/null; \
+           ls -t \"$dir\"/agent-* 2>/dev/null | grep -v '\\.infrazeug-staging-' | grep -v -x \"$dir/$keep\" \
+             | tail -n +2 | xargs -r rm -f ) >/dev/null 2>&1 || true",
+        bin = shell_escape(remote_bin),
+    )
+}
+
 async fn agent_remote_name(agent_local: &Path) -> Result<(String, String)> {
     let mut file = tokio::fs::File::open(agent_local)
         .await
@@ -334,6 +357,19 @@ mod tests {
         let second = agent_remote_name(&path).await.unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
         assert_ne!(first_name, second.0);
+    }
+
+    #[test]
+    fn agent_cache_prune_keeps_current_binary_and_recent_staging() {
+        let script = agent_cache_prune_script("/home/u/.cache/infrazeug/agent-0.1.0-abc");
+        // The binary about to run must survive by name, not by luck of mtime.
+        assert!(script.contains("keep=$(basename"));
+        assert!(script.contains("grep -v -x \"$dir/$keep\""));
+        // Staging leftovers are only reaped once a day old — an upload in
+        // flight must never be touched.
+        assert!(script.contains("-name '*.infrazeug-staging-*' -mmin +1440"));
+        // Prune never fails the connect.
+        assert!(script.trim_end().ends_with("|| true"));
     }
 
     #[test]
